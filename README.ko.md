@@ -43,7 +43,7 @@ coagent human vincent
 ## 명령어
 
 ```
-coagent hub
+coagent hub [--host <addr>]
 coagent agent <name> [path] [--resume]
 coagent human <name>
 coagent update                          # 자가 업데이트 (npm 최신 버전 재설치)
@@ -55,15 +55,28 @@ coagent --version
 
 에이전트의 `path` 는 상대경로(현재 셸 cwd 기준) 또는 절대경로 둘 다 가능. 기본값은 현재 디렉토리.
 
+### 네트워크 & 안전
+
+기본적으로 hub 는 `127.0.0.1` 에만 바인드 — 같은 머신에서만 붙을 수 있습니다.
+LAN 에 노출하려면 `--host 0.0.0.0` (또는 `HUB_HOST=0.0.0.0`) 을 명시적으로 줘야 합니다.
+허브에는 인증이 없으므로, 포트에 닿을 수 있는 누구든 채팅방에 들어올 수 있다는 점을 유의하세요.
+
+에이전트의 `HUB_URL` 이 로컬 주소가 아니면 자동으로 `acceptEdits` 모드로 시작합니다
+(Bash/네트워크 도구는 승인을 요구). 디폴트인 `bypassPermissions` 로 다시 올리려면
+신뢰할 수 있는 사람이 `/mode <agent> auto` 로 직접 지정.
+
+슬래시 커맨드 (control op) 는 사람만 보낼 수 있습니다 — 에이전트가 다른 에이전트를
+`/kill` 하거나 `/mode` 를 바꿀 수 없습니다.
+
 ### 슬래시 커맨드 (휴먼 TUI 안에서)
 
-- `/clear <agent>` — 에이전트의 Claude 세션과 컨텍스트 초기화
+- `/clear <agent>` — 에이전트의 Claude 세션과 컨텍스트 초기화 (진행 중인 턴은 abort)
 - `/compact <agent>` — 세션을 요약·압축해서 컨텍스트 여유 확보
-- `/status <agent>` — 세션 ID, 권한 모드, 큐, 턴 수, 비용
+- `/status <agent>` — 세션 ID, 권한 모드, 현재 task, 큐, 턴 수, 비용
 - `/usage <agent>` — 누적 토큰 사용량과 비용 (모델별 분리)
 - `/mode <agent> <plan|accept|auto|default>` — 권한 모드 변경
-- `/pause <agent>` / `/resume <agent>` — 메시지 처리 일시 중지 / 재개
-- `/kill <agent>` — 에이전트 프로세스 종료
+- `/pause <agent>` / `/resume <agent>` — 큐 처리 일시 중지 / 재개 (진행 중인 턴은 그대로 마침)
+- `/kill <agent>` — 에이전트 프로세스 종료 (진행 중인 턴은 abort)
 - `/quit` — 채팅방 나가기
 
 ### 멘션
@@ -100,9 +113,14 @@ coagent 는 디스크에 아무것도 저장하지 않습니다. 에이전트와
 에이전트가 살아있는 동안 "오늘 우리 뭐 했지?" 같은 게 궁금하면 그 에이전트한테
 직접 물어보세요. 각자 자기 쓰레드를 기억하고 있습니다.
 
+허브가 잠깐 끊기면 (재시작, 네트워크 흔들림 등) 에이전트와 휴먼은 백오프로
+자동 재연결하면서 기존 Claude 세션을 그대로 이어갑니다. 이름 충돌이나 잘못된
+핸드셰이크 같은 fatal 거절은 재연결하지 않고 종료합니다.
+
 ## 환경변수
 
 - `HUB_URL=ws://host:port` — 허브 주소 (기본 `ws://localhost:8787`)
+- `HUB_HOST=addr` — 허브 바인드 주소 (`--host` 가 우선)
 - `PORT=8787` — 허브 listen 포트
 
 ## 자동 업데이트 알림

@@ -1,8 +1,6 @@
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import * as clack from "@clack/prompts";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   MSG,
@@ -13,6 +11,9 @@ import {
   type ControlMsg,
   type ControlOp,
 } from "./protocol.ts";
+import { makeIntro } from "./agent/intro.ts";
+import { accumulateModelUsage, formatUsage } from "./agent/usage.ts";
+import { runResumePicker } from "./agent/session-picker.ts";
 
 const args = process.argv.slice(2);
 const positional = args.filter((a) => !a.startsWith("--"));
@@ -33,115 +34,11 @@ if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
   process.exit(1);
 }
 
-interface PastSession {
-  sid: string;
-  mtime: Date;
-  preview: string;
-  turns: number;
-}
-
-function encodeProjectPath(p: string): string {
-  // Claude Code stores per-project sessions under ~/.claude/projects/<encoded>
-  // where slashes are replaced with hyphens. Internal format, may change.
-  return p.replace(/\//g, "-");
-}
-
-function listClaudeSessions(cwdPath: string): PastSession[] {
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-  if (!fs.existsSync(projectsDir)) return [];
-  const projectDir = path.join(projectsDir, encodeProjectPath(cwdPath));
-  if (!fs.existsSync(projectDir)) return [];
-
-  const files = fs
-    .readdirSync(projectDir)
-    .filter((f) => f.endsWith(".jsonl"));
-
-  const sessions: PastSession[] = [];
-  for (const file of files) {
-    try {
-      const fullPath = path.join(projectDir, file);
-      const stat = fs.statSync(fullPath);
-      const sid = file.replace(/\.jsonl$/, "");
-
-      // Read only the first 4KB to get a preview without slurping huge logs.
-      const fd = fs.openSync(fullPath, "r");
-      const buf = Buffer.alloc(Math.min(4096, stat.size));
-      fs.readSync(fd, buf, 0, buf.length, 0);
-      fs.closeSync(fd);
-      const headLines = buf
-        .toString("utf-8")
-        .split("\n")
-        .filter((l) => l.trim().length > 0);
-
-      let preview = "";
-      for (const line of headLines) {
-        try {
-          const m = JSON.parse(line);
-          if (m.type === "user" && m.message?.content) {
-            const c = m.message.content;
-            if (typeof c === "string") preview = c;
-            else if (Array.isArray(c) && c[0]?.type === "text")
-              preview = c[0].text ?? "";
-            if (preview) break;
-          }
-        } catch {
-          // partial JSON at the 4KB cutoff — ignore
-        }
-      }
-      preview = preview.replace(/\s+/g, " ").trim().slice(0, 60);
-      // Approximate turn count from file size (avoids reading the whole file).
-      const turns = Math.max(1, Math.round(stat.size / 2048));
-      sessions.push({ sid, mtime: stat.mtime, preview, turns });
-    } catch {
-      // skip unreadable file
-    }
-  }
-
-  return sessions.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-}
-
-function fmtAgo(d: Date): string {
-  const ms = Date.now() - d.getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const days = Math.floor(h / 24);
-  return `${days}d ago`;
-}
-
 let initialSessionId: string | undefined;
 
 if (wantsResume) {
   try {
-    const sessions = listClaudeSessions(cwd);
-    if (sessions.length === 0) {
-      clack.note(
-        `no past Claude sessions found for ${cwd}\nstarting fresh.`,
-        `[${name}]`,
-      );
-    } else {
-      const choice = await clack.select({
-        message: `past Claude sessions for ${cwd}`,
-        options: [
-          { value: "fresh", label: "new — start a fresh session" },
-          ...sessions.map((s) => ({
-            value: s.sid,
-            label: `${fmtAgo(s.mtime).padEnd(8)} · ~${s.turns} turns · ${s.preview || "(no preview)"}`,
-            hint: s.sid.slice(0, 8),
-          })),
-        ],
-      });
-      if (clack.isCancel(choice)) {
-        clack.cancel("cancelled");
-        process.exit(0);
-      }
-      if (choice !== "fresh") {
-        initialSessionId = choice as string;
-      }
-    }
+    initialSessionId = await runResumePicker(name, cwd);
   } catch (e) {
     const err = e as { message?: string };
     console.warn(
@@ -170,76 +67,57 @@ const MODE_ALIASES: Record<string, PermissionMode> = {
   plan: "plan",
 };
 
+function isLocalHubUrl(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return (
+      h === "localhost" ||
+      h === "127.0.0.1" ||
+      h === "::1" ||
+      h === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+}
+const hubIsLocal = isLocalHubUrl(hubUrl);
+if (!hubIsLocal) {
+  console.warn(
+    `[${name}] hub at ${hubUrl} is non-local — defaulting permissionMode to acceptEdits.\n` +
+    `  any chat participant can direct this agent; bypassPermissions is unsafe over the network.\n` +
+    `  use /mode ${name} auto from a trusted human to override.`,
+  );
+}
+
 let ws: WebSocket | null = null;
 let sessionId: string | null = initialSessionId ?? null;
 let introSent = false;
 let roster: Participant[] = [];
 const queue: { from: string; content: string }[] = [];
-let processing = false;
+type TaskKind = "turn" | "compact" | "usage";
+let currentTask: TaskKind | null = null;
+let currentAbort: AbortController | null = null;
 let paused = false;
 let totalCost = 0;
 let totalTurns = 0;
-let permissionMode: PermissionMode = "bypassPermissions";
 
-type ModelStats = {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens: number;
-  cacheCreationInputTokens: number;
-  webSearchRequests: number;
-  costUSD: number;
-};
-const modelStats: Record<string, ModelStats> = {};
+function startTask(kind: TaskKind): AbortController | null {
+  if (currentTask !== null) return null;
+  const controller = new AbortController();
+  currentTask = kind;
+  currentAbort = controller;
+  return controller;
+}
 
-function accumulateModelUsage(mu: unknown) {
-  if (!mu || typeof mu !== "object") return;
-  for (const [model, raw] of Object.entries(mu as Record<string, unknown>)) {
-    const u = raw as Partial<ModelStats>;
-    if (!modelStats[model]) {
-      modelStats[model] = {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-        webSearchRequests: 0,
-        costUSD: 0,
-      };
-    }
-    const s = modelStats[model];
-    s.inputTokens += u.inputTokens ?? 0;
-    s.outputTokens += u.outputTokens ?? 0;
-    s.cacheReadInputTokens += u.cacheReadInputTokens ?? 0;
-    s.cacheCreationInputTokens += u.cacheCreationInputTokens ?? 0;
-    s.webSearchRequests += u.webSearchRequests ?? 0;
-    s.costUSD += u.costUSD ?? 0;
+function finishTask(controller: AbortController) {
+  if (currentAbort === controller) {
+    currentAbort = null;
+    currentTask = null;
   }
 }
-
-function fmtN(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
-  return String(n);
-}
-
-function formatUsage(): string {
-  const totals = Object.values(modelStats).reduce(
-    (acc, s) => ({
-      in: acc.in + s.inputTokens,
-      out: acc.out + s.outputTokens,
-      cr: acc.cr + s.cacheReadInputTokens,
-      cw: acc.cw + s.cacheCreationInputTokens,
-    }),
-    { in: 0, out: 0, cr: 0, cw: 0 },
-  );
-  const head = `$${totalCost.toFixed(4)} · ${totalTurns} turns · in=${fmtN(totals.in)} out=${fmtN(totals.out)} cache(r/w)=${fmtN(totals.cr)}/${fmtN(totals.cw)}`;
-  const models = Object.entries(modelStats);
-  if (models.length === 0) return `${head} · (no model data yet)`;
-  if (models.length === 1) return head;
-  const perModel = models
-    .map(([m, s]) => `${m}:$${s.costUSD.toFixed(4)}`)
-    .join(" ");
-  return `${head} · [${perModel}]`;
-}
+let permissionMode: PermissionMode = hubIsLocal
+  ? "bypassPermissions"
+  : "acceptEdits";
 
 function setSessionId(id: string | null) {
   sessionId = id;
@@ -266,12 +144,13 @@ function sendAck(
 }
 
 async function runUsagePassthrough(requester: string) {
-  if (processing) {
-    sendAck("usage", false, "busy — try again after the current turn", requester);
+  const controller = startTask("usage");
+  if (!controller) {
+    sendAck("usage", false, `busy: in ${currentTask}`, requester);
     return;
   }
-  processing = true;
   let resultText = "";
+  let failure: string | null = null;
   try {
     const res = query({
       prompt: "/usage",
@@ -280,6 +159,7 @@ async function runUsagePassthrough(requester: string) {
         executable: "node",
         permissionMode,
         resume: sessionId ?? undefined,
+        abortController: controller,
         mcpServers: {
           "agent-chat": {
             type: "sdk",
@@ -300,22 +180,21 @@ async function runUsagePassthrough(requester: string) {
     }
   } catch (e) {
     const err = e as { message?: string };
-    sendAck(
-      "usage",
-      true,
-      `${formatUsage()}\n(CLI /usage failed: ${err.message ?? String(e)})`,
-      requester,
-    );
-    processing = false;
-    if (queue.length > 0) processQueue();
-    return;
+    failure = controller.signal.aborted
+      ? "aborted"
+      : `CLI /usage failed: ${err.message ?? String(e)}`;
+  } finally {
+    finishTask(controller);
   }
-  processing = false;
 
-  const combined = resultText
-    ? `${formatUsage()}\n${resultText}`
-    : `${formatUsage()}\n(CLI /usage returned no data — reset window info is not exposed via SDK)`;
-  sendAck("usage", true, combined, requester);
+  if (failure) {
+    sendAck("usage", true, `${formatUsage(totalCost, totalTurns)}\n(${failure})`, requester);
+  } else {
+    const combined = resultText
+      ? `${formatUsage(totalCost, totalTurns)}\n${resultText}`
+      : `${formatUsage(totalCost, totalTurns)}\n(CLI /usage returned no data — reset window info is not exposed via SDK)`;
+    sendAck("usage", true, combined, requester);
+  }
   if (queue.length > 0) processQueue();
 }
 
@@ -324,16 +203,11 @@ async function runCompact(requester: string) {
     sendAck("compact", false, "no active session to compact", requester);
     return;
   }
-  if (processing) {
-    sendAck(
-      "compact",
-      false,
-      "busy — wait for the current turn, then retry",
-      requester,
-    );
+  const controller = startTask("compact");
+  if (!controller) {
+    sendAck("compact", false, `busy: in ${currentTask}`, requester);
     return;
   }
-  processing = true;
   console.log(`[${name}] /compact starting (session=${sessionId})`);
   let acked = false;
   try {
@@ -344,6 +218,7 @@ async function runCompact(requester: string) {
         executable: "node",
         permissionMode,
         resume: sessionId ?? undefined,
+        abortController: controller,
         mcpServers: {
           "agent-chat": {
             type: "sdk",
@@ -373,9 +248,13 @@ async function runCompact(requester: string) {
     if (!acked) sendAck("compact", true, "done", requester);
   } catch (e) {
     const err = e as { message?: string };
-    sendAck("compact", false, `failed: ${err.message ?? String(e)}`, requester);
+    if (controller.signal.aborted) {
+      sendAck("compact", false, "aborted", requester);
+    } else {
+      sendAck("compact", false, `failed: ${err.message ?? String(e)}`, requester);
+    }
   } finally {
-    processing = false;
+    finishTask(controller);
     if (queue.length > 0) processQueue();
   }
 }
@@ -387,15 +266,15 @@ function handleControl(msg: ControlMsg) {
   switch (op) {
     case "clear": {
       const prev = sessionId;
+      const inflight = currentTask;
+      currentAbort?.abort();
       setSessionId(null);
       introSent = false;
       queue.length = 0;
-      sendAck(
-        op,
-        true,
-        prev ? `session cleared (was ${prev.slice(0, 8)}…)` : "no prior session",
-        requester,
-      );
+      const note = prev
+        ? `session cleared (was ${prev.slice(0, 8)}…)${inflight ? `, ${inflight} aborted` : ""}`
+        : "no prior session";
+      sendAck(op, true, note, requester);
       return;
     }
     case "compact": {
@@ -406,6 +285,7 @@ function handleControl(msg: ControlMsg) {
       const lines = [
         `session=${sessionId ?? "(none)"}`,
         `mode=${permissionMode}`,
+        `task=${currentTask ?? "idle"}`,
         `paused=${paused}`,
         `queue=${queue.length}`,
         `turns=${totalTurns}`,
@@ -456,8 +336,9 @@ function handleControl(msg: ControlMsg) {
       return;
     }
     case "kill": {
+      currentAbort?.abort();
       sendAck(op, true, "exiting", requester);
-      setTimeout(() => process.exit(0), 100);
+      setTimeout(() => process.exit(0), KILL_GRACE_MS);
       return;
     }
     default:
@@ -494,43 +375,13 @@ const chatServer = createSdkMcpServer({
   tools: [sendChatTool],
 });
 
-function makeIntro(): string {
-  const others = roster.filter((p) => p.name !== name);
-  const list = others.length
-    ? others.map((p) => `${p.name} (${p.role})`).join(", ")
-    : "(nobody else yet)";
-  return `You are "${name}", a Claude Code agent working in the project at ${cwd}.
-
-You are part of a multi-participant group chat with other Claude Code agents and humans.
-Current other participants: ${list}.
-
-Rules:
-- To send a message to the group, use the send_chat tool.
-- Use @name (pure identifier, no "/" or ".") to address a participant — e.g. @Vincent, @Alice. Use @all to address every participant at once.
-- When YOU want to reference a file in send_chat content, just write its path (e.g. "check src/foo.ts" or the absolute path).
-- When an incoming message mentions a filesystem path (absolute or looks like a path), treat it as a file reference and use your Read tool as appropriate. Your cwd is ${cwd}.
-- Plain text you output is NOT delivered to chat — only send_chat calls reach other participants.
-- You only receive messages that mention @${name}. Incoming messages are formatted as "[from <name>] <text>".
-- You have full Claude Code tools (Read, Grep, Bash, etc.) for inspecting this project.
-- Keep replies concise. When you need info from another agent's project, ask them via @their-name.
-- Always end a turn with at least one send_chat call addressing whoever asked you.
-
-Formatting rules for send_chat content (the human TUI renders markdown):
-- Use GitHub-flavored markdown: **bold**, \`inline code\`, "# heading", bullet/numbered lists, "> quote".
-- For code, file contents, or command output, ALWAYS wrap in a fenced block with a language tag:
-  \`\`\`ts ... \`\`\`, \`\`\`py ... \`\`\`, \`\`\`bash ... \`\`\`, etc.
-- For patches/diffs, use \`\`\`diff ... \`\`\` so "+" / "-" lines get colored.
-- Prefer short excerpts. Blocks over ~30 lines are auto-collapsed in the viewer, so paste only the relevant slice and summarize the rest in prose.
-- Don't paste entire large files. Reference them with @path and let the reader open the file themselves.
-
-Begin.`;
-}
 
 async function processQueue() {
-  if (processing || paused || queue.length === 0) return;
-  processing = true;
+  if (paused || queue.length === 0) return;
+  const controller = startTask("turn");
+  if (!controller) return;
   const batch = queue.splice(0, queue.length);
-  const header = introSent ? "" : makeIntro() + "\n\n";
+  const header = introSent ? "" : makeIntro(name, cwd, roster) + "\n\n";
   introSent = true;
   const body = batch.map((m) => `[from ${m.from}] ${m.content}`).join("\n");
   const promptText = header + body;
@@ -544,6 +395,7 @@ async function processQueue() {
         executable: "node",
         permissionMode,
         resume: sessionId ?? undefined,
+        abortController: controller,
         mcpServers: {
           "agent-chat": {
             type: "sdk",
@@ -584,17 +436,59 @@ async function processQueue() {
       }
     }
   } catch (e: any) {
-    console.error(`[${name}] turn error:`, e?.message ?? e);
-    if (e?.stack) console.error(e.stack);
+    if (controller.signal.aborted) {
+      console.log(`[${name}] turn aborted`);
+    } else {
+      console.error(`[${name}] turn error:`, e?.message ?? e);
+      if (e?.stack) console.error(e.stack);
+    }
   } finally {
-    processing = false;
+    finishTask(controller);
     if (queue.length > 0) processQueue();
   }
+}
+
+// Reconnect backoff: 0.5s, 1s, 2s, 4s, 8s, 16s, then 30s cap.
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_BACKOFF_CAP = 6;
+// Grace period after /kill ack so SDK has time to clean up child processes.
+const KILL_GRACE_MS = 300;
+// Grace period after SIGINT/SIGTERM before forced exit.
+const SHUTDOWN_GRACE_MS = 500;
+
+let shuttingDown = false;
+let reconnectAttempt = 0;
+let fatalReason: string | null = null;
+let reconnectTimer: NodeJS.Timeout | null = null;
+
+function reconnectDelay(attempt: number): number {
+  const exp = Math.min(attempt - 1, RECONNECT_BACKOFF_CAP);
+  return Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** exp);
+}
+
+function scheduleReconnect() {
+  if (shuttingDown) return;
+  if (fatalReason) {
+    console.error(`[${name}] not reconnecting: ${fatalReason}`);
+    process.exit(1);
+    return;
+  }
+  reconnectAttempt += 1;
+  const delay = reconnectDelay(reconnectAttempt);
+  console.log(
+    `[${name}] reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempt})`,
+  );
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!shuttingDown) connect();
+  }, delay);
 }
 
 function connect() {
   ws = new WebSocket(hubUrl);
   ws.addEventListener("open", () => {
+    reconnectAttempt = 0;
     ws!.send(encode({ type: MSG.HELLO, name, role: "agent" }));
     console.log(`[${name}] connected to ${hubUrl} (cwd=${cwd})`);
   });
@@ -609,7 +503,11 @@ function connect() {
       roster = msg.participants;
     } else if (msg.type === MSG.SYSTEM) {
       if (Array.isArray(msg.participants)) roster = msg.participants;
-      console.log(`[${name}] -- ${msg.text}`);
+      const t = msg.text;
+      if (t.includes("already taken") || t.includes("expected hello")) {
+        fatalReason = t;
+      }
+      console.log(`[${name}] -- ${t}`);
     } else if (msg.type === MSG.MESSAGE) {
       if (msg.from === name) return;
       const addressed =
@@ -626,7 +524,7 @@ function connect() {
     console.log(
       `[${name}] disconnected (code=${ev.code}, reason=${ev.reason || "(none)"})`,
     );
-    process.exit(0);
+    scheduleReconnect();
   });
   ws.addEventListener("error", (ev) => {
     console.error(`[${name}] ws error`, ev);
@@ -635,17 +533,20 @@ function connect() {
 
 connect();
 
-let shuttingDown = false;
 function shutdown(signal: NodeJS.Signals) {
   if (shuttingDown) {
     process.exit(130);
   }
   shuttingDown = true;
   console.log(`[${name}] received ${signal}, exiting…`);
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   try {
     ws?.close();
   } catch {}
-  setTimeout(() => process.exit(0), 500).unref();
+  setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));

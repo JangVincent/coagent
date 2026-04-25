@@ -93,7 +93,10 @@ export function parseMentions(
   validNames?: Set<string>,
 ): string[] {
   const names = new Set<string>();
-  const re = /@([A-Za-z][A-Za-z0-9_-]*)(?![/~]|\.[\w/])/g;
+  // Reject any trailing identifier/path char so `@vincent.com`, `@foo/bar`,
+  // `@vincent_v2` (when partial match would shorten) don't sneak through via
+  // backtracking.
+  const re = /@([A-Za-z][A-Za-z0-9_-]*)(?![\w.\-/~])/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const n = m[1];

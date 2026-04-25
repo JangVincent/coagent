@@ -44,7 +44,7 @@ In the human TUI:
 ## Commands
 
 ```
-coagent hub
+coagent hub [--host <addr>]
 coagent agent <name> [path] [--resume]
 coagent human <name>
 ```
@@ -56,15 +56,30 @@ existing conversation instead of starting fresh.
 `path` for an agent can be relative (resolved against your shell's cwd) or
 absolute. Defaults to the current directory.
 
+### Networking & safety
+
+By default the hub binds to `127.0.0.1` only — connections come from the
+same machine. To expose it on your LAN explicitly, pass `--host 0.0.0.0`
+(or set `HUB_HOST=0.0.0.0`). The hub has no auth, so anyone who can reach
+the port can join the room.
+
+When an agent's `HUB_URL` points at a non-local host, it automatically
+starts in `acceptEdits` mode (Bash/network tools still ask for permission)
+instead of the default `bypassPermissions`. Use `/mode <agent> auto` from
+a trusted human to opt back in.
+
+Only humans may issue slash-command control ops. Agents are not allowed
+to `/kill` or `/mode` other agents.
+
 ### Slash commands (in human TUI)
 
-- `/clear <agent>` — wipe an agent's Claude session
+- `/clear <agent>` — wipe an agent's Claude session (aborts any in-flight turn)
 - `/compact <agent>` — summarise & compact session to free context
-- `/status <agent>` — session id, mode, queue, turns, cost
+- `/status <agent>` — session id, mode, current task, queue, turns, cost
 - `/usage <agent>` — cumulative tokens & cost
 - `/mode <agent> <plan|accept|auto|default>` — change permission mode
-- `/pause <agent>` / `/resume <agent>` — hold or release the queue
-- `/kill <agent>` — terminate the agent process
+- `/pause <agent>` / `/resume <agent>` — hold or release the queue (in-flight turn keeps running)
+- `/kill <agent>` — terminate the agent process (aborts any in-flight turn)
 - `/quit` — leave the chat
 
 ### Mentions
@@ -93,6 +108,10 @@ restarts, leave the agent running.
 
 If you want to "remember" what a chat covered while the agents are still
 alive, ask them — each remembers its own thread.
+
+If the hub disconnects (restart, network blip), agents and humans
+automatically reconnect with backoff and resume their existing Claude
+session. Fatal rejections (name conflict, bad handshake) exit instead.
 
 ## How it fits with Claude Code
 

@@ -9,11 +9,19 @@ import {
   decode,
   parseMentions,
   type ChatMsg,
-  type ControlOp,
   type Participant,
   type ServerMsg,
 } from "./protocol.ts";
 import { ContentView } from "./render-content.tsx";
+import { expandFileRefsInContent } from "./human/file-ref.ts";
+import { COMMANDS, completeSlash } from "./human/slash.ts";
+
+// Reconnect backoff: 0.5s, 1s, 2s, 4s, 8s, 16s, then 30s cap (matches agent).
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_BACKOFF_CAP = 6;
+// How long to keep the fatal-disconnect message visible before auto-exit.
+const FATAL_EXIT_DELAY_MS = 1500;
 
 const args = process.argv.slice(2);
 const myName =
@@ -30,25 +38,6 @@ const PALETTE = [
   "#b8e06a", "#ff6565", "#7ee3d0", "#ffc79e", "#9ec8ff",
   "#ff9ed8", "#40d0c0", "#ff9e9e", "#4ecf8f", "#e6b8ff",
 ];
-
-function longestCommonPrefix(strs: string[]): string {
-  if (strs.length === 0) return "";
-  const first = strs[0];
-  let i = 0;
-  while (i < first.length) {
-    const ch = first[i];
-    let match = true;
-    for (let j = 1; j < strs.length; j++) {
-      if (strs[j][i] !== ch) {
-        match = false;
-        break;
-      }
-    }
-    if (!match) break;
-    i++;
-  }
-  return first.slice(0, i);
-}
 
 function hashIndex(who: string): number {
   let h = 0;
@@ -222,33 +211,6 @@ function computeFileRefContext(
   };
 }
 
-function expandFileRefsInContent(
-  content: string,
-  knownNames: Set<string>,
-): string {
-  return content.replace(/@(\S+)/g, (match, partial: string) => {
-    if (/^[A-Za-z][A-Za-z0-9_-]*$/.test(partial) && knownNames.has(partial)) {
-      return match;
-    }
-    const isExplicit = /^(\.{1,2}\/|\/|~\/|~$)/.test(partial);
-    const expanded =
-      partial === "~" || partial === "~/"
-        ? os.homedir()
-        : partial.startsWith("~/")
-          ? path.join(os.homedir(), partial.slice(2))
-          : partial;
-    const abs = path.isAbsolute(expanded)
-      ? expanded
-      : path.resolve(process.cwd(), expanded);
-    let exists = false;
-    try {
-      exists = fs.existsSync(abs);
-    } catch {}
-    if (isExplicit || exists) return abs;
-    return match;
-  });
-}
-
 function applyPopupSelection(
   draft: string,
   ctx: FileRefContext,
@@ -268,27 +230,6 @@ function applyPopupSelection(
   const base = draft.slice(0, draft.length - ctx.matchLen) + "@" + newPartial;
   return entry.isDir ? base : base + " ";
 }
-
-type CommandDef = {
-  name: string;
-  args: string;
-  desc: string;
-  op?: ControlOp;
-  local?: "quit";
-};
-
-const COMMANDS: CommandDef[] = [
-  { name: "clear", args: "<agent>", desc: "Wipe the agent's Claude session & context", op: "clear" },
-  { name: "compact", args: "<agent>", desc: "Summarize & compact the agent's session to free context", op: "compact" },
-  { name: "status", args: "<agent>", desc: "Show session, mode, queue, turns, cost", op: "status" },
-  { name: "usage", args: "<agent>", desc: "Show cumulative tokens & cost (per-model breakdown)", op: "usage" },
-  { name: "mode", args: "<agent> [default|accept|auto|plan]", desc: "Set permission mode", op: "mode" },
-  { name: "pause", args: "<agent>", desc: "Stop processing messages", op: "pause" },
-  { name: "resume", args: "<agent>", desc: "Resume a paused agent", op: "resume" },
-  { name: "kill", args: "<agent>", desc: "Terminate an agent process", op: "kill" },
-  { name: "quit", args: "", desc: "Leave the chat", local: "quit" },
-  { name: "exit", args: "", desc: "Leave the chat (alias)", local: "quit" },
-];
 
 interface PickerState {
   open: boolean;
@@ -452,46 +393,102 @@ function App() {
   );
 
   useEffect(() => {
-    const ws = new WebSocket(hubUrl);
-    wsRef.current = ws;
-    ws.addEventListener("open", () => {
-      ws.send(encode({ type: MSG.HELLO, name: myName, role: "human" }));
-    });
-    ws.addEventListener("message", (ev) => {
-      let msg: ServerMsg;
-      try {
-        msg = decode<ServerMsg>(ev.data as string);
-      } catch {
-        return;
-      }
-      if (msg.type === MSG.MESSAGE) {
-        const cm = msg as ChatMsg;
-        if (cm.from === myName) return;
-        pushEntry({
-          kind: "chat",
-          from: cm.from,
-          content: cm.content,
-          mentions: cm.mentions,
-          ts: cm.ts,
-        });
-      } else if (msg.type === MSG.ROSTER) {
-        setRoster(msg.participants);
-      } else if (msg.type === MSG.SYSTEM) {
-        if (Array.isArray(msg.participants)) setRoster(msg.participants);
-        pushEntry({ kind: "system", content: msg.text, ts: Date.now() });
-      } else if (msg.type === MSG.CONTROL_ACK) {
-        const mark = msg.ok ? "✓" : "✗";
-        const info = msg.info ? ` — ${msg.info}` : "";
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let lastSystem = "";
+
+    const reconnectDelay = (n: number) => {
+      const exp = Math.min(n - 1, RECONNECT_BACKOFF_CAP);
+      return Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** exp);
+    };
+
+    const connect = () => {
+      if (cancelled) return;
+      const ws = new WebSocket(hubUrl);
+      wsRef.current = ws;
+      ws.addEventListener("open", () => {
+        if (attempt > 0) {
+          pushEntry({
+            kind: "system",
+            content: `reconnected to ${hubUrl}`,
+            ts: Date.now(),
+          });
+        }
+        attempt = 0;
+        ws.send(encode({ type: MSG.HELLO, name: myName, role: "human" }));
+      });
+      ws.addEventListener("message", (ev) => {
+        let msg: ServerMsg;
+        try {
+          msg = decode<ServerMsg>(ev.data as string);
+        } catch {
+          return;
+        }
+        if (msg.type === MSG.MESSAGE) {
+          const cm = msg as ChatMsg;
+          if (cm.from === myName) return;
+          pushEntry({
+            kind: "chat",
+            from: cm.from,
+            content: cm.content,
+            mentions: cm.mentions,
+            ts: cm.ts,
+          });
+        } else if (msg.type === MSG.ROSTER) {
+          setRoster(msg.participants);
+        } else if (msg.type === MSG.SYSTEM) {
+          if (Array.isArray(msg.participants)) setRoster(msg.participants);
+          lastSystem = msg.text;
+          pushEntry({ kind: "system", content: msg.text, ts: Date.now() });
+        } else if (msg.type === MSG.CONTROL_ACK) {
+          const mark = msg.ok ? "✓" : "✗";
+          const info = msg.info ? ` — ${msg.info}` : "";
+          pushEntry({
+            kind: "system",
+            content: `${mark} [${msg.target}] ${msg.op}${info}`,
+            ts: msg.ts ?? Date.now(),
+          });
+        }
+      });
+      ws.addEventListener("close", () => {
+        if (cancelled) return;
+        if (
+          lastSystem.includes("already taken") ||
+          lastSystem.includes("expected hello")
+        ) {
+          pushEntry({
+            kind: "system",
+            content: `${lastSystem} — exiting`,
+            ts: Date.now(),
+          });
+          timer = setTimeout(() => {
+            timer = null;
+            exit();
+          }, FATAL_EXIT_DELAY_MS);
+          return;
+        }
+        attempt += 1;
+        const delay = reconnectDelay(attempt);
         pushEntry({
           kind: "system",
-          content: `${mark} [${msg.target}] ${msg.op}${info}`,
-          ts: msg.ts ?? Date.now(),
+          content: `disconnected — reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${attempt})`,
+          ts: Date.now(),
         });
-      }
-    });
-    ws.addEventListener("close", () => {});
-    ws.addEventListener("error", () => {});
-    return () => ws.close();
+        timer = setTimeout(connect, delay);
+      });
+      ws.addEventListener("error", () => {});
+    };
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      try {
+        wsRef.current?.close();
+      } catch {}
+    };
   }, []);
 
   const shutdown = () => {
@@ -503,7 +500,7 @@ function App() {
 
   const sendNow = (content: string) => {
     const knownNames = new Set([...roster.map((p) => p.name), "all"]);
-    const expanded = expandFileRefsInContent(content, knownNames);
+    const expanded = expandFileRefsInContent(content);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(encode({ type: MSG.MESSAGE, content: expanded }));
       pushEntry({
@@ -557,33 +554,6 @@ function App() {
     closePicker();
   };
 
-  const completeSlash = (input: string): string | null => {
-    if (!input.startsWith("/")) return null;
-    const body = input.slice(1);
-    const firstSpace = body.indexOf(" ");
-    if (firstSpace < 0) {
-      const matches = COMMANDS.filter((c) => c.name.startsWith(body));
-      if (matches.length === 0) return null;
-      if (matches.length === 1) {
-        const needsArg = matches[0].args.length > 0;
-        return `/${matches[0].name}${needsArg ? " " : ""}`;
-      }
-      const lcp = longestCommonPrefix(matches.map((c) => c.name));
-      return lcp.length > body.length ? `/${lcp}` : null;
-    }
-    const cmdName = body.slice(0, firstSpace);
-    const argPart = body.slice(firstSpace + 1);
-    const def = COMMANDS.find((c) => c.name === cmdName);
-    if (!def || !def.op) return null;
-    const agents = roster.filter((p) => p.role === "agent");
-    const matches = agents.filter((a) =>
-      a.name.toLowerCase().startsWith(argPart.toLowerCase()),
-    );
-    if (matches.length === 0) return null;
-    if (matches.length === 1) return `/${cmdName} ${matches[0].name}`;
-    const lcp = longestCommonPrefix(matches.map((a) => a.name));
-    return lcp.length > argPart.length ? `/${cmdName} ${lcp}` : null;
-  };
 
   const fileRefCtx = useMemo(() => {
     if (pickerRef.current.open) return INACTIVE_FILEREF;
@@ -677,7 +647,10 @@ function App() {
     }
     // Slash command tab complete
     if (key.tab && draft.startsWith("/")) {
-      const completed = completeSlash(draft);
+      const agentNames = roster
+        .filter((p) => p.role === "agent")
+        .map((p) => p.name);
+      const completed = completeSlash(draft, agentNames);
       if (completed && completed !== draft) {
         setDraft(completed);
           }

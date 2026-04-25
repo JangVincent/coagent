@@ -11,6 +11,24 @@ import {
 } from "./protocol.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
+// Force the close after the system message if the send callback doesn't fire
+// quickly enough (e.g. peer is unresponsive).
+const SEND_AND_CLOSE_TIMEOUT_MS = 500;
+// Force-exit if wss.close() doesn't return (e.g. a stuck client).
+const SHUTDOWN_FORCE_EXIT_MS = 1000;
+// Standard SIGINT exit code.
+const SIGINT_EXIT_CODE = 130;
+
+function parseHost(): string {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--host" && args[i + 1]) return args[i + 1];
+    if (a.startsWith("--host=")) return a.slice("--host=".length);
+  }
+  return process.env.HUB_HOST ?? "127.0.0.1";
+}
+const HOST = parseHost();
 
 interface WsState {
   name: string | null;
@@ -35,11 +53,29 @@ function broadcast(obj: unknown, except?: WebSocket) {
   }
 }
 
+function sendAndClose(ws: WebSocket, text: string) {
+  const payload = encode({ type: MSG.SYSTEM, text });
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    try {
+      ws.close();
+    } catch {}
+  };
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(payload, () => close());
+    setTimeout(close, SEND_AND_CLOSE_TIMEOUT_MS).unref();
+  } else {
+    close();
+  }
+}
+
 function sendRoster() {
   broadcast({ type: MSG.ROSTER, participants: roster() });
 }
 
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ port: PORT, host: HOST });
 
 wss.on("connection", (ws) => {
   states.set(ws, { name: null, role: null });
@@ -55,20 +91,11 @@ wss.on("connection", (ws) => {
 
     if (!data.name) {
       if (msg.type !== MSG.HELLO || !msg.name || !msg.role) {
-        ws.send(
-          encode({ type: MSG.SYSTEM, text: "expected hello { name, role }" }),
-        );
-        ws.close();
+        sendAndClose(ws, "expected hello { name, role }");
         return;
       }
       if (clients.has(msg.name)) {
-        ws.send(
-          encode({
-            type: MSG.SYSTEM,
-            text: `name '${msg.name}' already taken`,
-          }),
-        );
-        ws.close();
+        sendAndClose(ws, `name '${msg.name}' already taken`);
         return;
       }
       data.name = msg.name;
@@ -107,6 +134,18 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type === MSG.CONTROL) {
+      if (data.role !== "human") {
+        ws.send(
+          encode({
+            type: MSG.SYSTEM,
+            text: `control: only humans may issue control ops`,
+          }),
+        );
+        console.log(
+          `[hub] control denied: ${data.name} (${data.role}) tried ${msg.op} on ${msg.target}`,
+        );
+        return;
+      }
       const targetWs = clients.get(msg.target);
       const targetState = targetWs ? states.get(targetWs) : undefined;
       if (!targetWs || targetState?.role !== "agent") {
@@ -147,14 +186,15 @@ wss.on("connection", (ws) => {
 wss.on("listening", () => {
   const addr = wss.address();
   const port = typeof addr === "object" && addr ? addr.port : PORT;
-  console.log(`[hub] listening on ws://localhost:${port}`);
+  const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "<any>" : HOST;
+  console.log(`[hub] listening on ws://${displayHost}:${port}`);
 });
 
 let shuttingDown = false;
 function shutdown(signal: NodeJS.Signals) {
   if (shuttingDown) {
     // Second Ctrl+C — force exit immediately.
-    process.exit(130);
+    process.exit(SIGINT_EXIT_CODE);
   }
   shuttingDown = true;
   console.log(`[hub] received ${signal}, closing connections…`);
@@ -166,9 +206,7 @@ function shutdown(signal: NodeJS.Signals) {
   wss.close(() => {
     process.exit(0);
   });
-  // Safety net: if close hangs (e.g., a client refuses to disconnect),
-  // force exit after 1s.
-  setTimeout(() => process.exit(0), 1000).unref();
+  setTimeout(() => process.exit(0), SHUTDOWN_FORCE_EXIT_MS).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));

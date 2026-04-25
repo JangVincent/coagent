@@ -22,17 +22,21 @@ if (sub === "--version" || sub === "-v") {
 const USAGE = `coagent — multi-participant chat for Claude Code agents and humans
 
 usage:
-  coagent hub                              start the chat hub
+  coagent hub [--host <addr>]              start the chat hub (default 127.0.0.1)
   coagent agent <name> [path] [--resume]   connect an agent (path defaults to cwd)
   coagent human <name>                     connect as a human
   coagent update                           install the latest version from npm
   coagent --version                        print version
+
+hub options:
+  --host <addr>                            bind address (default 127.0.0.1; use 0.0.0.0 to expose on LAN)
 
 agent options:
   --resume                                 pick from past Claude sessions for that path
 
 env:
   HUB_URL=ws://host:port                   override hub address (default ws://localhost:8787)
+  HUB_HOST=addr                            hub bind address (overridden by --host)
   PORT=8787                                hub listen port
 `;
 
