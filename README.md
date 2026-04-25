@@ -82,7 +82,7 @@ sending so every agent reads the same file.
 
 ## Data
 
-State lives in `~/.data/agent-chat-cowork/`:
+State lives in `~/.data/coagent/`:
 
 - `chat.jsonl` — append-only message log (last 200 messages replayed as
   backlog when a client connects)

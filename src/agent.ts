@@ -19,9 +19,22 @@ const name = args[0] ?? process.env.AGENT_NAME;
 const cwdArg = args[1] ?? process.env.AGENT_CWD ?? process.cwd();
 const freshSession = args.includes("--new") || args.includes("--fresh");
 const hubUrl = process.env.HUB_URL ?? "ws://localhost:8787";
-const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
+const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "coagent");
+const LEGACY_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
 const DATA_DIR = path.resolve(process.env.DATA_DIR ?? DEFAULT_DATA_DIR);
 const SESSION_DIR = path.join(DATA_DIR, "sessions");
+
+// One-time migration so existing agent sessions keep working after rename.
+if (
+  !process.env.DATA_DIR &&
+  !fs.existsSync(DATA_DIR) &&
+  fs.existsSync(LEGACY_DATA_DIR)
+) {
+  try {
+    fs.renameSync(LEGACY_DATA_DIR, DATA_DIR);
+    console.log(`[${name ?? "agent"}] migrated ${LEGACY_DATA_DIR} → ${DATA_DIR}`);
+  } catch {}
+}
 
 if (!name) {
   console.error("usage: agent.ts <name> [cwd] [--new]");
@@ -210,7 +223,7 @@ async function runUsagePassthrough(requester: string) {
       prompt: "/usage",
       options: {
         cwd,
-        executable: process.execPath as "bun" | "node",
+        executable: "node",
         permissionMode,
         resume: sessionId ?? undefined,
         mcpServers: {
@@ -274,7 +287,7 @@ async function runCompact(requester: string) {
       prompt: "/compact",
       options: {
         cwd,
-        executable: process.execPath as "bun" | "node",
+        executable: "node",
         permissionMode,
         resume: sessionId ?? undefined,
         mcpServers: {
@@ -473,7 +486,7 @@ async function processQueue() {
       prompt: promptText,
       options: {
         cwd,
-        executable: process.execPath as "bun" | "node",
+        executable: "node",
         permissionMode,
         resume: sessionId ?? undefined,
         mcpServers: {

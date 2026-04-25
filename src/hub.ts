@@ -14,12 +14,28 @@ import {
 } from "./protocol.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
-const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
+const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "coagent");
+const LEGACY_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
 const DATA_DIR = path.resolve(process.env.DATA_DIR ?? DEFAULT_DATA_DIR);
 const LOG_PATH = path.join(DATA_DIR, "chat.jsonl");
 const BACKLOG_SIZE = Number(process.env.BACKLOG_SIZE ?? 200);
 const freshStart =
   process.argv.includes("--fresh") || process.argv.includes("--new");
+
+// One-time migration: if the new dir doesn't exist but the legacy one does,
+// move it so existing users keep their chat log and agent sessions.
+if (
+  !process.env.DATA_DIR &&
+  !fs.existsSync(DATA_DIR) &&
+  fs.existsSync(LEGACY_DATA_DIR)
+) {
+  try {
+    fs.renameSync(LEGACY_DATA_DIR, DATA_DIR);
+    console.log(`[hub] migrated ${LEGACY_DATA_DIR} → ${DATA_DIR}`);
+  } catch (e) {
+    console.error(`[hub] migration failed:`, e);
+  }
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
