@@ -406,6 +406,7 @@ function MessageBlock({
       paddingX={1}
       flexDirection="column"
       marginBottom={1}
+      alignSelf="flex-start"
     >
       <Text>
         <Text bold color={senderColor}>
@@ -866,7 +867,13 @@ function App() {
         </Text>
       </Box>
 
-      <Box borderStyle="round" borderColor="gray" paddingX={1}>
+      <Box
+        borderStyle="round"
+        borderColor="gray"
+        borderLeft={false}
+        borderRight={false}
+        paddingX={1}
+      >
         <Text bold color={colorFor(myName!)}>
           {myName}
         </Text>
