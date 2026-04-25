@@ -353,9 +353,11 @@ function App() {
   const [entries, setEntries] = useState<LocalEntry[]>([]);
   const [roster, setRoster] = useState<Participant[]>([]);
   const [draft, setDraft] = useState("");
+  const [inputKey, setInputKey] = useState(0);
   const [fileRefIndex, setFileRefIndex] = useState(0);
   const [, setPickerVer] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
+  const skipNextSubmit = useRef(false);
   const idRef = useRef(0);
   const pickerRef = useRef<PickerState>({
     open: false,
@@ -462,6 +464,7 @@ function App() {
       });
     }
     setDraft("");
+    setInputKey((k) => k + 1);
   };
 
   const openPicker = (content: string) => {
@@ -472,6 +475,7 @@ function App() {
       draft: content,
     };
     setDraft("");
+    setInputKey((k) => k + 1);
     bumpPicker();
   };
 
@@ -572,6 +576,12 @@ function App() {
       shutdown();
       return;
     }
+    if (key.shift && key.return && !pickerRef.current.open) {
+      setDraft((d) => d + "\n");
+      setInputKey((k) => k + 1);
+      skipNextSubmit.current = true;
+      return;
+    }
     const pk = pickerRef.current;
     if (pk.open) {
       if (pickerItems.length === 0) {
@@ -614,6 +624,7 @@ function App() {
         const sel = fileRefCtx.items[fileRefIndex];
         if (sel) {
           setDraft(applyPopupSelection(draft, fileRefCtx, sel));
+          setInputKey((k) => k + 1);
         }
         return;
       }
@@ -623,6 +634,7 @@ function App() {
       const completed = completeSlash(draft);
       if (completed && completed !== draft) {
         setDraft(completed);
+        setInputKey((k) => k + 1);
       }
       return;
     }
@@ -669,21 +681,28 @@ function App() {
   };
 
   const sendDraft = () => {
+    if (skipNextSubmit.current) {
+      skipNextSubmit.current = false;
+      return;
+    }
     if (fileRefCtx.active && fileRefCtx.items.length > 0) {
       const sel = fileRefCtx.items[fileRefIndex];
       if (sel) {
         setDraft(applyPopupSelection(draft, fileRefCtx, sel));
+        setInputKey((k) => k + 1);
         return;
       }
     }
     const content = draft.trim();
     if (!content) {
       setDraft("");
+      setInputKey((k) => k + 1);
       return;
     }
     if (content.startsWith("/")) {
       runCommand(content);
       setDraft("");
+      setInputKey((k) => k + 1);
       return;
     }
     if (parseMentions(content).length === 0) {
@@ -797,6 +816,7 @@ function App() {
         </Text>
         <Text dimColor> › </Text>
         <TextInput
+          key={inputKey}
           value={draft}
           onChange={setDraft}
           onSubmit={sendDraft}
@@ -886,4 +906,4 @@ function App() {
   );
 }
 
-render(<App />);
+render(<App />, { kittyKeyboard: { mode: "enabled" } });
