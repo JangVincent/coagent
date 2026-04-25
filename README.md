@@ -45,7 +45,7 @@ In the human TUI:
 
 ```
 coagent hub
-coagent agent <name> [path] [--new]
+coagent agent <name> [path]
 coagent human <name>
 ```
 
@@ -80,22 +80,15 @@ sending so every agent reads the same file.
 @alice please review @./src/auth.ts and compare with /home/vincent/notes.md
 ```
 
-## Data
+## State
 
-Each chat session starts fresh — the hub keeps no chat log on disk. Each
-agent's Claude session id is persisted so the agent's own context survives
-process restarts:
+coagent itself stores nothing on disk. Each agent and the hub are pure
+processes — start them, use them, kill them. Every Claude session is
+created fresh on each agent launch; if you want continuity across
+restarts, leave the agent running.
 
-```
-~/.data/coagent/
-  sessions/
-    <name>_<cwdhash>.json     # Claude session id, one per (agent, cwd)
-```
-
-Override the data dir with `DATA_DIR=/some/path coagent ...`.
-
-If you want to "remember" what a chat covered, ask the agents — each
-remembers its own thread. The hub itself is just a router.
+If you want to "remember" what a chat covered while the agents are still
+alive, ask them — each remembers its own thread.
 
 ## How it fits with Claude Code
 

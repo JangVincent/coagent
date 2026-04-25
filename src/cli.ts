@@ -28,15 +28,9 @@ usage:
   coagent update                           install the latest version from npm
   coagent --version                        print version
 
-options (per subcommand):
-  coagent hub --fresh                      archive old chat log and start clean
-  coagent agent <name> [path] --new        ignore saved session, fresh Claude conversation
-  coagent human <name> --no-history        skip backlog on connect
-
 env:
   HUB_URL=ws://host:port                   override hub address (default ws://localhost:8787)
   PORT=8787                                hub listen port
-  DATA_DIR=~/.data/agent-chat-cowork       override data directory
 `;
 
 function bail(code: number, msg?: string): never {

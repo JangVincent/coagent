@@ -1,8 +1,6 @@
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   MSG,
@@ -17,27 +15,10 @@ import {
 const args = process.argv.slice(2);
 const name = args[0] ?? process.env.AGENT_NAME;
 const cwdArg = args[1] ?? process.env.AGENT_CWD ?? process.cwd();
-const freshSession = args.includes("--new") || args.includes("--fresh");
 const hubUrl = process.env.HUB_URL ?? "ws://localhost:8787";
-const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "coagent");
-const LEGACY_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
-const DATA_DIR = path.resolve(process.env.DATA_DIR ?? DEFAULT_DATA_DIR);
-const SESSION_DIR = path.join(DATA_DIR, "sessions");
-
-// One-time migration so existing agent sessions keep working after rename.
-if (
-  !process.env.DATA_DIR &&
-  !fs.existsSync(DATA_DIR) &&
-  fs.existsSync(LEGACY_DATA_DIR)
-) {
-  try {
-    fs.renameSync(LEGACY_DATA_DIR, DATA_DIR);
-    console.log(`[${name ?? "agent"}] migrated ${LEGACY_DATA_DIR} → ${DATA_DIR}`);
-  } catch {}
-}
 
 if (!name) {
-  console.error("usage: agent.ts <name> [cwd] [--new]");
+  console.error("usage: agent.ts <name> [cwd]");
   process.exit(1);
 }
 
@@ -46,46 +27,6 @@ if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
   console.error(`[${name}] cwd does not exist or is not a directory: ${cwd}`);
   console.error("  (check case — linux is case-sensitive: Dev vs dev)");
   process.exit(1);
-}
-
-fs.mkdirSync(SESSION_DIR, { recursive: true });
-
-function cwdTag(p: string): string {
-  return crypto.createHash("sha256").update(p).digest("hex").slice(0, 8);
-}
-const SESSION_FILE = path.join(
-  SESSION_DIR,
-  `${name}_${cwdTag(cwd)}.json`,
-);
-
-function loadSession(): string | null {
-  if (!fs.existsSync(SESSION_FILE)) return null;
-  try {
-    const data = JSON.parse(fs.readFileSync(SESSION_FILE, "utf-8"));
-    if (data.cwd && data.cwd !== cwd) return null;
-    return typeof data.sessionId === "string" ? data.sessionId : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveSession(id: string | null) {
-  try {
-    if (id) {
-      fs.writeFileSync(
-        SESSION_FILE,
-        JSON.stringify(
-          { name, cwd, sessionId: id, updatedAt: Date.now() },
-          null,
-          2,
-        ),
-      );
-    } else if (fs.existsSync(SESSION_FILE)) {
-      fs.unlinkSync(SESSION_FILE);
-    }
-  } catch (e) {
-    console.error(`[${name}] failed to persist session:`, e);
-  }
 }
 
 type PermissionMode =
@@ -109,7 +50,7 @@ const MODE_ALIASES: Record<string, PermissionMode> = {
 };
 
 let ws: WebSocket | null = null;
-let sessionId: string | null = freshSession ? null : loadSession();
+let sessionId: string | null = null;
 let roster: Participant[] = [];
 const queue: { from: string; content: string }[] = [];
 let processing = false;
@@ -178,17 +119,8 @@ function formatUsage(): string {
   return `${head} · [${perModel}]`;
 }
 
-if (freshSession) {
-  saveSession(null);
-  console.log(`[${name}] --new flag: starting fresh session`);
-} else if (sessionId) {
-  console.log(`[${name}] resumed session ${sessionId.slice(0, 8)}…`);
-}
-
 function setSessionId(id: string | null) {
-  if (sessionId === id) return;
   sessionId = id;
-  saveSession(id);
 }
 
 function sendAck(

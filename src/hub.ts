@@ -1,7 +1,4 @@
 import { WebSocketServer, WebSocket } from "ws";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   MSG,
   parseMentions,
@@ -14,25 +11,6 @@ import {
 } from "./protocol.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
-const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "coagent");
-const LEGACY_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
-const DATA_DIR = path.resolve(process.env.DATA_DIR ?? DEFAULT_DATA_DIR);
-
-// One-time migration of legacy data dir (still useful for agent session files).
-if (
-  !process.env.DATA_DIR &&
-  !fs.existsSync(DATA_DIR) &&
-  fs.existsSync(LEGACY_DATA_DIR)
-) {
-  try {
-    fs.renameSync(LEGACY_DATA_DIR, DATA_DIR);
-    console.log(`[hub] migrated ${LEGACY_DATA_DIR} → ${DATA_DIR}`);
-  } catch (e) {
-    console.error(`[hub] migration failed:`, e);
-  }
-}
-
-fs.mkdirSync(DATA_DIR, { recursive: true });
 
 interface WsState {
   name: string | null;
@@ -170,5 +148,4 @@ wss.on("listening", () => {
   const addr = wss.address();
   const port = typeof addr === "object" && addr ? addr.port : PORT;
   console.log(`[hub] listening on ws://localhost:${port}`);
-  console.log(`[hub] data dir: ${DATA_DIR}`);
 });
