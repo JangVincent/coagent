@@ -149,3 +149,27 @@ wss.on("listening", () => {
   const port = typeof addr === "object" && addr ? addr.port : PORT;
   console.log(`[hub] listening on ws://localhost:${port}`);
 });
+
+let shuttingDown = false;
+function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) {
+    // Second Ctrl+C — force exit immediately.
+    process.exit(130);
+  }
+  shuttingDown = true;
+  console.log(`[hub] received ${signal}, closing connections…`);
+  for (const ws of clients.values()) {
+    try {
+      ws.close();
+    } catch {}
+  }
+  wss.close(() => {
+    process.exit(0);
+  });
+  // Safety net: if close hangs (e.g., a client refuses to disconnect),
+  // force exit after 1s.
+  setTimeout(() => process.exit(0), 1000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
