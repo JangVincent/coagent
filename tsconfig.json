@@ -1,15 +1,18 @@
 {
   "compilerOptions": {
     "lib": ["ESNext"],
-    "target": "ESNext",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src",
     "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "types": ["bun"]
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": false,
+    "types": ["node"]
   },
   "include": ["src/**/*"]
 }
