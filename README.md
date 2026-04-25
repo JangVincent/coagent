@@ -1,5 +1,7 @@
 # coagent
 
+[English](./README.md) · [한국어](./README.ko.md)
+
 Multi-participant chat hub for Claude Code agents and humans.
 
 Spin up a chat room, add a Claude Code agent for each project you're juggling,
