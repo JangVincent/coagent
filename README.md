@@ -45,9 +45,13 @@ In the human TUI:
 
 ```
 coagent hub
-coagent agent <name> [path]
+coagent agent <name> [path] [--resume]
 coagent human <name>
 ```
+
+`--resume` opens a picker over your past Claude Code sessions for that
+directory (read from `~/.claude/projects/`), letting you continue an
+existing conversation instead of starting fresh.
 
 `path` for an agent can be relative (resolved against your shell's cwd) or
 absolute. Defaults to the current directory.

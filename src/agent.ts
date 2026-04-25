@@ -1,6 +1,8 @@
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import * as clack from "@clack/prompts";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   MSG,
@@ -13,12 +15,14 @@ import {
 } from "./protocol.ts";
 
 const args = process.argv.slice(2);
-const name = args[0] ?? process.env.AGENT_NAME;
-const cwdArg = args[1] ?? process.env.AGENT_CWD ?? process.cwd();
+const positional = args.filter((a) => !a.startsWith("--"));
+const name = positional[0] ?? process.env.AGENT_NAME;
+const cwdArg = positional[1] ?? process.env.AGENT_CWD ?? process.cwd();
+const wantsResume = args.includes("--resume");
 const hubUrl = process.env.HUB_URL ?? "ws://localhost:8787";
 
 if (!name) {
-  console.error("usage: agent.ts <name> [cwd]");
+  console.error("usage: agent.ts <name> [cwd] [--resume]");
   process.exit(1);
 }
 
@@ -27,6 +31,123 @@ if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
   console.error(`[${name}] cwd does not exist or is not a directory: ${cwd}`);
   console.error("  (check case — linux is case-sensitive: Dev vs dev)");
   process.exit(1);
+}
+
+interface PastSession {
+  sid: string;
+  mtime: Date;
+  preview: string;
+  turns: number;
+}
+
+function encodeProjectPath(p: string): string {
+  // Claude Code stores per-project sessions under ~/.claude/projects/<encoded>
+  // where slashes are replaced with hyphens. Internal format, may change.
+  return p.replace(/\//g, "-");
+}
+
+function listClaudeSessions(cwdPath: string): PastSession[] {
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  if (!fs.existsSync(projectsDir)) return [];
+  const projectDir = path.join(projectsDir, encodeProjectPath(cwdPath));
+  if (!fs.existsSync(projectDir)) return [];
+
+  const files = fs
+    .readdirSync(projectDir)
+    .filter((f) => f.endsWith(".jsonl"));
+
+  const sessions: PastSession[] = [];
+  for (const file of files) {
+    try {
+      const fullPath = path.join(projectDir, file);
+      const stat = fs.statSync(fullPath);
+      const sid = file.replace(/\.jsonl$/, "");
+
+      // Read only the first 4KB to get a preview without slurping huge logs.
+      const fd = fs.openSync(fullPath, "r");
+      const buf = Buffer.alloc(Math.min(4096, stat.size));
+      fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+      const headLines = buf
+        .toString("utf-8")
+        .split("\n")
+        .filter((l) => l.trim().length > 0);
+
+      let preview = "";
+      for (const line of headLines) {
+        try {
+          const m = JSON.parse(line);
+          if (m.type === "user" && m.message?.content) {
+            const c = m.message.content;
+            if (typeof c === "string") preview = c;
+            else if (Array.isArray(c) && c[0]?.type === "text")
+              preview = c[0].text ?? "";
+            if (preview) break;
+          }
+        } catch {
+          // partial JSON at the 4KB cutoff — ignore
+        }
+      }
+      preview = preview.replace(/\s+/g, " ").trim().slice(0, 60);
+      // Approximate turn count from file size (avoids reading the whole file).
+      const turns = Math.max(1, Math.round(stat.size / 2048));
+      sessions.push({ sid, mtime: stat.mtime, preview, turns });
+    } catch {
+      // skip unreadable file
+    }
+  }
+
+  return sessions.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
+function fmtAgo(d: Date): string {
+  const ms = Date.now() - d.getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24);
+  return `${days}d ago`;
+}
+
+let initialSessionId: string | undefined;
+
+if (wantsResume) {
+  try {
+    const sessions = listClaudeSessions(cwd);
+    if (sessions.length === 0) {
+      clack.note(
+        `no past Claude sessions found for ${cwd}\nstarting fresh.`,
+        `[${name}]`,
+      );
+    } else {
+      const choice = await clack.select({
+        message: `past Claude sessions for ${cwd}`,
+        options: [
+          { value: "fresh", label: "new — start a fresh session" },
+          ...sessions.map((s) => ({
+            value: s.sid,
+            label: `${fmtAgo(s.mtime).padEnd(8)} · ~${s.turns} turns · ${s.preview || "(no preview)"}`,
+            hint: s.sid.slice(0, 8),
+          })),
+        ],
+      });
+      if (clack.isCancel(choice)) {
+        clack.cancel("cancelled");
+        process.exit(0);
+      }
+      if (choice !== "fresh") {
+        initialSessionId = choice as string;
+      }
+    }
+  } catch (e) {
+    const err = e as { message?: string };
+    console.warn(
+      `[${name}] could not read Claude session history (${err.message ?? e}); starting fresh`,
+    );
+  }
 }
 
 type PermissionMode =
@@ -50,7 +171,8 @@ const MODE_ALIASES: Record<string, PermissionMode> = {
 };
 
 let ws: WebSocket | null = null;
-let sessionId: string | null = null;
+let sessionId: string | null = initialSessionId ?? null;
+let introSent = false;
 let roster: Participant[] = [];
 const queue: { from: string; content: string }[] = [];
 let processing = false;
@@ -266,6 +388,7 @@ function handleControl(msg: ControlMsg) {
     case "clear": {
       const prev = sessionId;
       setSessionId(null);
+      introSent = false;
       queue.length = 0;
       sendAck(
         op,
@@ -407,8 +530,8 @@ async function processQueue() {
   if (processing || paused || queue.length === 0) return;
   processing = true;
   const batch = queue.splice(0, queue.length);
-  const firstTurn = sessionId === null;
-  const header = firstTurn ? makeIntro() + "\n\n" : "";
+  const header = introSent ? "" : makeIntro() + "\n\n";
+  introSent = true;
   const body = batch.map((m) => `[from ${m.from}] ${m.content}`).join("\n");
   const promptText = header + body;
 

@@ -23,10 +23,13 @@ const USAGE = `coagent — multi-participant chat for Claude Code agents and hum
 
 usage:
   coagent hub                              start the chat hub
-  coagent agent <name> [path]              connect an agent (path defaults to cwd)
+  coagent agent <name> [path] [--resume]   connect an agent (path defaults to cwd)
   coagent human <name>                     connect as a human
   coagent update                           install the latest version from npm
   coagent --version                        print version
+
+agent options:
+  --resume                                 pick from past Claude sessions for that path
 
 env:
   HUB_URL=ws://host:port                   override hub address (default ws://localhost:8787)

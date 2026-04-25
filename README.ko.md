@@ -44,11 +44,14 @@ coagent human vincent
 
 ```
 coagent hub
-coagent agent <name> [path]
+coagent agent <name> [path] [--resume]
 coagent human <name>
 coagent update                          # 자가 업데이트 (npm 최신 버전 재설치)
 coagent --version
 ```
+
+`--resume` 을 주면 그 디렉토리의 과거 Claude Code 세션 목록 (`~/.claude/projects/`)
+이 picker 로 떠서, fresh 대신 기존 대화를 이어받을 수 있습니다.
 
 에이전트의 `path` 는 상대경로(현재 셸 cwd 기준) 또는 절대경로 둘 다 가능. 기본값은 현재 디렉토리.
 
