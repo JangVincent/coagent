@@ -11,10 +11,10 @@ sessions with slash commands.
 ## Install
 
 ```bash
-npm i -g coagent
+npm i -g @vincentjang/coagent
 ```
 
-Requires Node 20+.
+Provides the `coagent` command. Requires Node 20+.
 
 ## Quick start
 

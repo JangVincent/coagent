@@ -1,5 +1,5 @@
 {
-  "name": "coagent",
+  "name": "@vincentjang/coagent",
   "version": "0.1.0",
   "type": "module",
   "description": "Multi-participant chat hub for Claude Code agents and humans — coordinate Claude agents across multiple projects from one terminal",
