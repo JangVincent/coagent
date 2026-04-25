@@ -635,6 +635,22 @@ function connect() {
 
 connect();
 
+let shuttingDown = false;
+function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) {
+    process.exit(130);
+  }
+  shuttingDown = true;
+  console.log(`[${name}] received ${signal}, exiting…`);
+  try {
+    ws?.close();
+  } catch {}
+  setTimeout(() => process.exit(0), 500).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
 process.on("uncaughtException", (e) => {
   console.error(`[${name}] UNCAUGHT`, e);
 });
