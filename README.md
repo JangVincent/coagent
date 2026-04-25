@@ -44,9 +44,9 @@ In the human TUI:
 ## Commands
 
 ```
-coagent hub [--fresh]
+coagent hub
 coagent agent <name> [path] [--new]
-coagent human <name> [--no-history]
+coagent human <name>
 ```
 
 `path` for an agent can be relative (resolved against your shell's cwd) or
@@ -82,13 +82,20 @@ sending so every agent reads the same file.
 
 ## Data
 
-State lives in `~/.data/coagent/`:
+Each chat session starts fresh — the hub keeps no chat log on disk. Each
+agent's Claude session id is persisted so the agent's own context survives
+process restarts:
 
-- `chat.jsonl` — append-only message log (last 200 messages replayed as
-  backlog when a client connects)
-- `sessions/<name>_<cwdhash>.json` — Claude session id per (agent, cwd)
+```
+~/.data/coagent/
+  sessions/
+    <name>_<cwdhash>.json     # Claude session id, one per (agent, cwd)
+```
 
-Override with `DATA_DIR=/some/path coagent ...`.
+Override the data dir with `DATA_DIR=/some/path coagent ...`.
+
+If you want to "remember" what a chat covered, ask the agents — each
+remembers its own thread. The hub itself is just a router.
 
 ## How it fits with Claude Code
 

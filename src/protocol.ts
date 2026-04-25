@@ -5,7 +5,6 @@ export const MSG = {
   SYSTEM: "system",
   CONTROL: "control",
   CONTROL_ACK: "control_ack",
-  BACKLOG: "backlog",
 } as const;
 
 export const CONTROL_OPS = [
@@ -75,18 +74,12 @@ export interface ControlAckMsg {
   ts: number;
 }
 
-export interface BacklogMsg {
-  type: "backlog";
-  messages: ChatMsg[];
-}
-
 export type ServerMsg =
   | ChatMsg
   | RosterMsg
   | SystemMsg
   | ControlMsg
-  | ControlAckMsg
-  | BacklogMsg;
+  | ControlAckMsg;
 export type ClientMsg =
   | HelloMsg
   | OutgoingMsg

@@ -18,7 +18,6 @@ import { ContentView } from "./render-content.tsx";
 const args = process.argv.slice(2);
 const myName =
   args.filter((a) => !a.startsWith("--"))[0] ?? process.env.CHAT_NAME;
-const skipHistory = args.includes("--no-history");
 const hubUrl = process.env.HUB_URL ?? "ws://localhost:8787";
 
 if (!myName) {
@@ -480,23 +479,6 @@ function App() {
       } else if (msg.type === MSG.SYSTEM) {
         if (Array.isArray(msg.participants)) setRoster(msg.participants);
         pushEntry({ kind: "system", content: msg.text, ts: Date.now() });
-      } else if (msg.type === MSG.BACKLOG) {
-        if (skipHistory || msg.messages.length === 0) return;
-        pushEntry({
-          kind: "system",
-          content: `history (${msg.messages.length})`,
-          ts: msg.messages[0].ts,
-        });
-        for (const cm of msg.messages) {
-          pushEntry({
-            kind: "chat",
-            from: cm.from,
-            content: cm.content,
-            mentions: cm.mentions,
-            ts: cm.ts,
-          });
-        }
-        pushEntry({ kind: "system", content: "live", ts: Date.now() });
       } else if (msg.type === MSG.CONTROL_ACK) {
         const mark = msg.ok ? "✓" : "✗";
         const info = msg.info ? ` — ${msg.info}` : "";

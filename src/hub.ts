@@ -17,13 +17,8 @@ const PORT = Number(process.env.PORT ?? 8787);
 const DEFAULT_DATA_DIR = path.join(os.homedir(), ".data", "coagent");
 const LEGACY_DATA_DIR = path.join(os.homedir(), ".data", "agent-chat-cowork");
 const DATA_DIR = path.resolve(process.env.DATA_DIR ?? DEFAULT_DATA_DIR);
-const LOG_PATH = path.join(DATA_DIR, "chat.jsonl");
-const BACKLOG_SIZE = Number(process.env.BACKLOG_SIZE ?? 200);
-const freshStart =
-  process.argv.includes("--fresh") || process.argv.includes("--new");
 
-// One-time migration: if the new dir doesn't exist but the legacy one does,
-// move it so existing users keep their chat log and agent sessions.
+// One-time migration of legacy data dir (still useful for agent session files).
 if (
   !process.env.DATA_DIR &&
   !fs.existsSync(DATA_DIR) &&
@@ -38,46 +33,6 @@ if (
 }
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
-
-if (freshStart && fs.existsSync(LOG_PATH)) {
-  const ts = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .replace("T", "_")
-    .slice(0, 19);
-  const archivePath = path.join(DATA_DIR, `chat-${ts}.jsonl.bak`);
-  fs.renameSync(LOG_PATH, archivePath);
-  console.log(`[hub] --fresh: archived old log to ${archivePath}`);
-}
-
-const recent: ChatMsg[] = [];
-
-function loadRecent() {
-  if (!fs.existsSync(LOG_PATH)) return;
-  try {
-    const content = fs.readFileSync(LOG_PATH, "utf-8");
-    const lines = content.split("\n").filter((l) => l.length > 0);
-    for (const line of lines.slice(-BACKLOG_SIZE)) {
-      try {
-        const m = JSON.parse(line) as ChatMsg;
-        if (m.type === "message") recent.push(m);
-      } catch {}
-    }
-    console.log(`[hub] loaded ${recent.length} messages from ${LOG_PATH}`);
-  } catch (e) {
-    console.error(`[hub] failed to load log:`, e);
-  }
-}
-
-function appendToLog(msg: ChatMsg) {
-  try {
-    fs.appendFileSync(LOG_PATH, JSON.stringify(msg) + "\n");
-  } catch (e) {
-    console.error(`[hub] failed to append log:`, e);
-  }
-}
-
-loadRecent();
 
 interface WsState {
   name: string | null;
@@ -148,9 +103,6 @@ wss.on("connection", (ws) => {
           participants: roster(),
         }),
       );
-      if (recent.length > 0) {
-        ws.send(encode({ type: MSG.BACKLOG, messages: recent }));
-      }
       broadcast(
         { type: MSG.SYSTEM, text: `${msg.name} (${msg.role}) joined` },
         ws,
@@ -173,9 +125,6 @@ wss.on("connection", (ws) => {
         `[hub] ${out.from} -> ${out.mentions.join(",") || "*"}: ${out.content}`,
       );
       broadcast(out);
-      appendToLog(out);
-      recent.push(out);
-      if (recent.length > BACKLOG_SIZE) recent.shift();
       return;
     }
 
