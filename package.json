@@ -1,6 +1,6 @@
 {
   "name": "@vincentjang/coagent",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Multi-participant chat hub for Claude Code agents and humans — coordinate Claude agents across multiple projects from one terminal",
   "license": "MIT",
