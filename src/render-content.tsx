@@ -1,4 +1,5 @@
 import { marked, type Token, type Tokens } from "marked";
+import { Box, Text } from "ink";
 import type { ReactNode } from "react";
 
 marked.use({ gfm: true, breaks: false });
@@ -13,17 +14,9 @@ function parse(text: string): Token[] {
   return marked.lexer(text);
 }
 
-export function isSimpleParagraph(text: string): Token[] | null {
-  const tokens = parse(text).filter((t) => t.type !== "space");
-  if (tokens.length === 1 && tokens[0].type === "paragraph") {
-    return (tokens[0] as Tokens.Paragraph).tokens;
-  }
-  return null;
-}
-
 function renderTextWithMentions(
   raw: string,
-  { me, colorFor }: RenderDeps,
+  { colorFor }: RenderDeps,
   keyPrefix: string,
 ): ReactNode[] {
   const out: ReactNode[] = [];
@@ -34,18 +27,18 @@ function renderTextWithMentions(
   while ((m = MENTION_RE.exec(raw)) !== null) {
     if (m.index > last) {
       out.push(
-        <span key={`${keyPrefix}-t${idx++}`}>{raw.slice(last, m.index)}</span>,
+        <Text key={`${keyPrefix}-t${idx++}`}>{raw.slice(last, m.index)}</Text>,
       );
     }
     out.push(
-      <strong key={`${keyPrefix}-m${idx++}`} fg={colorFor(m[1])}>
+      <Text key={`${keyPrefix}-m${idx++}`} bold color={colorFor(m[1])}>
         @{m[1]}
-      </strong>,
+      </Text>,
     );
     last = m.index + m[0].length;
   }
   if (last < raw.length) {
-    out.push(<span key={`${keyPrefix}-t${idx++}`}>{raw.slice(last)}</span>);
+    out.push(<Text key={`${keyPrefix}-t${idx++}`}>{raw.slice(last)}</Text>);
   }
   return out;
 }
@@ -71,79 +64,79 @@ function renderInline(
       case "strong": {
         const t = tok as Tokens.Strong;
         out.push(
-          <strong key={key} fg="#ffffff">
+          <Text key={key} bold color="white">
             {renderInline(t.tokens, deps, key)}
-          </strong>,
+          </Text>,
         );
         break;
       }
       case "em": {
         const t = tok as Tokens.Em;
         out.push(
-          <em key={key} fg="#d8c8ff">
+          <Text key={key} italic color="#d8c8ff">
             {renderInline(t.tokens, deps, key)}
-          </em>,
+          </Text>,
         );
         break;
       }
       case "codespan": {
         const t = tok as Tokens.Codespan;
         out.push(
-          <span key={key} fg="#ffbb4d">
+          <Text key={key} color="#ffbb4d">
             `{t.text}`
-          </span>,
+          </Text>,
         );
         break;
       }
       case "del": {
         const t = tok as Tokens.Del;
         out.push(
-          <span key={key} fg="#6c6c6c">
+          <Text key={key} strikethrough>
             {renderInline(t.tokens, deps, key)}
-          </span>,
+          </Text>,
         );
         break;
       }
       case "link": {
         const t = tok as Tokens.Link;
         out.push(
-          <u key={key} fg="#8db8ff">
+          <Text key={key} underline color="#8db8ff">
             {renderInline(t.tokens, deps, key)}
-          </u>,
+          </Text>,
         );
         if (t.href && t.href !== t.text) {
           out.push(
-            <span key={`${key}-href`} fg="#555">
+            <Text key={`${key}-href`} dimColor>
               {" ("}
               {t.href}
               {")"}
-            </span>,
+            </Text>,
           );
         }
         break;
       }
-      case "br": {
-        out.push(<span key={key}> </span>);
+      case "br":
+        out.push(<Text key={key}> </Text>);
         break;
-      }
       case "escape": {
         const t = tok as Tokens.Escape;
-        out.push(<span key={key}>{t.text}</span>);
+        out.push(<Text key={key}>{t.text}</Text>);
         break;
       }
       case "html": {
         const t = tok as Tokens.HTML;
         out.push(
-          <span key={key} fg="#666">
+          <Text key={key} dimColor>
             {t.text}
-          </span>,
+          </Text>,
         );
         break;
       }
       default: {
-        const raw = (tok as { text?: string; raw?: string }).text
-          ?? (tok as { raw?: string }).raw
-          ?? "";
+        const raw =
+          (tok as { text?: string; raw?: string }).text ??
+          (tok as { raw?: string }).raw ??
+          "";
         if (raw) {
           out.push(...renderTextWithMentions(raw, deps, key));
         }
@@ -153,43 +146,30 @@ function renderInline(
   return out;
 }
 
-export function InlineTokenRun({
-  tokens,
-  me,
-  colorFor,
-}: { tokens: Token[] } & RenderDeps) {
-  return <>{renderInline(tokens, { me, colorFor }, "inl")}</>;
-}
-
 function CodeBlockView({ lang, lines }: { lang: string; lines: string[] }) {
   const visible = lines.slice(0, COLLAPSE_THRESHOLD);
   const hidden = lines.length - visible.length;
-  const title = lang ? ` ${lang} ` : " code ";
+  const label = lang || "code";
   return (
-    <box
-      border
-      borderColor="#333"
-      backgroundColor="#0e0e0e"
-      paddingLeft={1}
-      paddingRight={1}
+    <Box
       flexDirection="column"
-      title={title}
-      titleAlignment="left"
+      borderStyle="round"
+      borderColor="#333"
+      paddingX={1}
     >
-      {visible.length === 0 && <text fg="#6c6c6c">(empty)</text>}
+      <Text dimColor>─ {label} ─</Text>
+      {visible.length === 0 && <Text dimColor>(empty)</Text>}
       {visible.map((line, i) => (
-        <text key={i} fg="#d0d0d0">
+        <Text key={i} color="#d0d0d0">
           {line.length === 0 ? " " : line}
-        </text>
+        </Text>
       ))}
       {hidden > 0 && (
-        <text fg="#6c6c6c">
-          <span>
-            … {hidden} more line{hidden === 1 ? "" : "s"} hidden
-          </span>
-        </text>
+        <Text dimColor>
+          … {hidden} more line{hidden === 1 ? "" : "s"} hidden
+        </Text>
       )}
-    </box>
+    </Box>
   );
 }
 
@@ -197,46 +177,41 @@ function DiffBlockView({ lines }: { lines: string[] }) {
   const visible = lines.slice(0, COLLAPSE_THRESHOLD);
   const hidden = lines.length - visible.length;
   return (
-    <box
-      border
-      borderColor="#333"
-      backgroundColor="#0e0e0e"
-      paddingLeft={1}
-      paddingRight={1}
+    <Box
       flexDirection="column"
-      title=" diff "
-      titleAlignment="left"
+      borderStyle="round"
+      borderColor="#333"
+      paddingX={1}
     >
+      <Text dimColor>─ diff ─</Text>
       {visible.map((line, i) => {
-        let fg = "#a0a0a0";
+        let color: string | undefined = "#a0a0a0";
         if (
           line.startsWith("+++") ||
           line.startsWith("---") ||
           line.startsWith("diff --git") ||
           line.startsWith("index ")
         ) {
-          fg = "#6c6c6c";
+          color = "#6c6c6c";
         } else if (line.startsWith("@@")) {
-          fg = "#d8a0ff";
+          color = "#d8a0ff";
         } else if (line.startsWith("+")) {
-          fg = "#7ee3a0";
+          color = "#7ee3a0";
         } else if (line.startsWith("-")) {
-          fg = "#ff8a8a";
+          color = "#ff8a8a";
         }
         return (
-          <text key={i} fg={fg}>
+          <Text key={i} color={color}>
             {line.length === 0 ? " " : line}
-          </text>
+          </Text>
         );
       })}
       {hidden > 0 && (
-        <text fg="#6c6c6c">
-          <span>
-            … {hidden} more line{hidden === 1 ? "" : "s"} hidden
-          </span>
-        </text>
+        <Text dimColor>
+          … {hidden} more line{hidden === 1 ? "" : "s"} hidden
+        </Text>
       )}
-    </box>
+    </Box>
   );
 }
 
@@ -244,7 +219,11 @@ function ListItemBody({
   item,
   deps,
   keyPrefix,
-}: { item: Tokens.ListItem; deps: RenderDeps; keyPrefix: string }) {
+}: {
+  item: Tokens.ListItem;
+  deps: RenderDeps;
+  keyPrefix: string;
+}) {
   const children: ReactNode[] = [];
   item.tokens.forEach((tok, i) => {
     const k = `${keyPrefix}-${i}`;
@@ -253,7 +232,7 @@ function ListItemBody({
       const inline = t.tokens
         ? renderInline(t.tokens, deps, k)
         : renderTextWithMentions(t.text, deps, k);
-      children.push(<text key={k}>{inline}</text>);
+      children.push(<Text key={k}>{inline}</Text>);
     } else {
       children.push(<BlockRenderer key={k} block={tok} deps={deps} />);
     }
@@ -264,116 +243,99 @@ function ListItemBody({
 function HeadingView({
   block,
   deps,
-}: { block: Tokens.Heading; deps: RenderDeps }) {
+}: {
+  block: Tokens.Heading;
+  deps: RenderDeps;
+}) {
   const prefix = "#".repeat(block.depth);
   return (
-    <text>
-      <span fg="#6a9fff">{prefix} </span>
-      <strong fg="#cbe3ff">
+    <Text>
+      <Text color="#6a9fff">{prefix} </Text>
+      <Text bold color="#cbe3ff">
         {renderInline(block.tokens, deps, "h")}
-      </strong>
-    </text>
+      </Text>
+    </Text>
   );
 }
 
 function ParagraphView({
   block,
   deps,
-}: { block: Tokens.Paragraph; deps: RenderDeps }) {
-  return <text>{renderInline(block.tokens, deps, "p")}</text>;
+}: {
+  block: Tokens.Paragraph;
+  deps: RenderDeps;
+}) {
+  return <Text>{renderInline(block.tokens, deps, "p")}</Text>;
 }
 
-function ListView({
-  block,
-  deps,
-}: { block: Tokens.List; deps: RenderDeps }) {
+function ListView({ block, deps }: { block: Tokens.List; deps: RenderDeps }) {
   const startNum =
     block.start === "" || block.start === undefined ? 1 : Number(block.start);
   return (
-    <box flexDirection="column">
+    <Box flexDirection="column">
       {block.items.map((item, i) => {
         const marker = block.ordered ? `${startNum + i}.` : "•";
         return (
-          <box key={i} flexDirection="row">
-            <text>
-              <span fg="#ffd66b">{marker} </span>
-            </text>
-            <box flexGrow={1} flexDirection="column">
-              <ListItemBody
-                item={item}
-                deps={deps}
-                keyPrefix={`li${i}`}
-              />
-            </box>
-          </box>
+          <Box key={i} flexDirection="row">
+            <Text color="#ffd66b">{marker} </Text>
+            <Box flexGrow={1} flexDirection="column">
+              <ListItemBody item={item} deps={deps} keyPrefix={`li${i}`} />
+            </Box>
+          </Box>
         );
       })}
-    </box>
+    </Box>
   );
 }
 
-function TableView({
-  block,
-  deps,
-}: { block: Tokens.Table; deps: RenderDeps }) {
+function TableView({ block, deps }: { block: Tokens.Table; deps: RenderDeps }) {
   const nCols = block.header.length;
   return (
-    <box
-      border
-      borderColor="#444"
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="row"
-    >
+    <Box borderStyle="round" borderColor="#444" flexDirection="row" paddingX={1}>
       {Array.from({ length: nCols }, (_, c) => (
-        <box
+        <Box
           key={c}
           flexDirection="column"
           marginLeft={c === 0 ? 0 : 2}
         >
-          <text>
-            <strong fg="#cbe3ff">
-              {renderInline(block.header[c].tokens, deps, `th${c}`)}
-            </strong>
-          </text>
-          <box height={1} backgroundColor="#333" marginTop={0} marginBottom={0} />
+          <Text bold color="#cbe3ff">
+            {renderInline(block.header[c].tokens, deps, `th${c}`)}
+          </Text>
+          <Text dimColor>───</Text>
           {block.rows.map((row, r) => {
             const cell = row[c];
-            if (!cell) return <text key={r}> </text>;
             return (
-              <text key={r}>
-                {renderInline(cell.tokens, deps, `td${r}${c}`)}
-              </text>
+              <Text key={r}>
+                {cell ? renderInline(cell.tokens, deps, `td${r}${c}`) : " "}
+              </Text>
             );
           })}
-        </box>
+        </Box>
       ))}
-    </box>
+    </Box>
   );
 }
 
 function BlockquoteView({
   block,
   deps,
-}: { block: Tokens.Blockquote; deps: RenderDeps }) {
+}: {
+  block: Tokens.Blockquote;
+  deps: RenderDeps;
+}) {
   return (
-    <box flexDirection="row">
-      <text>
-        <span fg="#555">▍ </span>
-      </text>
-      <box flexGrow={1} flexDirection="column">
+    <Box flexDirection="row">
+      <Text dimColor>▍ </Text>
+      <Box flexGrow={1} flexDirection="column">
         {block.tokens.map((t, i) => (
           <BlockRenderer key={i} block={t} deps={deps} />
         ))}
-      </box>
-    </box>
+      </Box>
+    </Box>
   );
 }
 
-function BlockRenderer({
-  block,
-  deps,
-}: { block: Token; deps: RenderDeps }) {
+function BlockRenderer({ block, deps }: { block: Token; deps: RenderDeps }) {
   switch (block.type) {
     case "heading":
       return <HeadingView block={block as Tokens.Heading} deps={deps} />;
@@ -382,9 +344,8 @@ function BlockRenderer({
     case "code": {
       const b = block as Tokens.Code;
       const lang = (b.lang ?? "").toLowerCase();
-      if (lang === "diff" || lang === "patch") {
+      if (lang === "diff" || lang === "patch")
         return <DiffBlockView lines={b.text.split("\n")} />;
-      }
       return <CodeBlockView lang={b.lang ?? ""} lines={b.text.split("\n")} />;
     }
     case "list":
@@ -394,23 +355,19 @@ function BlockRenderer({
     case "blockquote":
       return <BlockquoteView block={block as Tokens.Blockquote} deps={deps} />;
     case "hr":
-      return (
-        <text fg="#333">
-          ──────────────────────────────────────────
-        </text>
-      );
+      return <Text dimColor>──────────────────────────────────────────</Text>;
     case "space":
       return null;
     case "html": {
       const b = block as Tokens.HTML;
-      return <text fg="#666">{b.text}</text>;
+      return <Text dimColor>{b.text}</Text>;
     }
     default: {
       const raw =
         (block as { text?: string }).text ??
         (block as { raw?: string }).raw ??
         "";
-      return <text>{raw}</text>;
+      return <Text>{raw}</Text>;
     }
   }
 }
@@ -422,10 +379,10 @@ export function ContentView({
 }: { text: string } & RenderDeps) {
   const tokens = parse(text);
   return (
-    <box flexDirection="column">
+    <Box flexDirection="column">
       {tokens.map((b, i) => (
         <BlockRenderer key={i} block={b} deps={{ me, colorFor }} />
       ))}
-    </box>
+    </Box>
   );
 }

@@ -5,7 +5,6 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "@opentui/react",
     "strict": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,

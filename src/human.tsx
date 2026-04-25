@@ -1,6 +1,6 @@
-import { createCliRenderer, type ScrollBoxRenderable } from "@opentui/core";
-import { createRoot, useKeyboard } from "@opentui/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { render, Box, Text, Static, useInput, useApp } from "ink";
+import TextInput from "ink-text-input";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,29 +17,13 @@ import {
 import { ContentView } from "./render-content.tsx";
 
 const args = process.argv.slice(2);
-const myName = args.filter((a) => !a.startsWith("--"))[0] ?? process.env.CHAT_NAME;
+const myName =
+  args.filter((a) => !a.startsWith("--"))[0] ?? process.env.CHAT_NAME;
 const skipHistory = args.includes("--no-history");
 const hubUrl = process.env.HUB_URL ?? "ws://localhost:8787";
 
-let rendererRef: Awaited<ReturnType<typeof createCliRenderer>> | null = null;
-let wsForCleanup: WebSocket | null = null;
-let shuttingDown = false;
-
-function shutdown(code: number = 0): never {
-  if (!shuttingDown) {
-    shuttingDown = true;
-    try {
-      wsForCleanup?.close();
-    } catch {}
-    try {
-      rendererRef?.destroy();
-    } catch {}
-  }
-  process.exit(code);
-}
-
 if (!myName) {
-  console.error("usage: human.tsx <name>");
+  console.error("usage: human.tsx <name> [--no-history]");
   process.exit(1);
 }
 
@@ -109,67 +93,6 @@ interface LocalEntry {
   ts: number;
 }
 
-function MessageRow({
-  entry,
-  me,
-  colorFor,
-}: {
-  entry: LocalEntry;
-  me: string;
-  colorFor: (who: string) => string;
-}) {
-  if (entry.kind === "system") {
-    const lines = entry.content.split("\n");
-    if (lines.length === 1) {
-      return (
-        <text fg="#808080">
-          <span>── {lines[0]}</span>
-        </text>
-      );
-    }
-    return (
-      <box flexDirection="column">
-        {lines.map((line, i) => (
-          <text key={i} fg="#808080">
-            <span>{i === 0 ? "── " : "   "}{line}</span>
-          </text>
-        ))}
-      </box>
-    );
-  }
-  const addressed =
-    entry.from !== me &&
-    ((entry.mentions?.includes(me) || entry.mentions?.includes("all")) ??
-      false);
-  const senderColor = colorFor(entry.from ?? "?");
-  const name = entry.from ?? "?";
-
-  return (
-    <box
-      border
-      borderColor={senderColor}
-      paddingLeft={1}
-      paddingRight={1}
-      marginBottom={1}
-      flexDirection="column"
-    >
-      <text>
-        <strong fg={senderColor}>{name}</strong>
-        {addressed && <span fg="#ffd66b">  → you</span>}
-      </text>
-      <box height={1} />
-      <ContentView text={entry.content} me={me} colorFor={colorFor} />
-    </box>
-  );
-}
-
-interface PickerState {
-  open: boolean;
-  index: number;
-  selected: Set<string>;
-  draft: string;
-}
-
 interface FileEntry {
   name: string;
   isDir: boolean;
@@ -229,6 +152,7 @@ function computeFileRefContext(
   ) {
     participants.unshift({ name: "all", role: "all" });
   }
+
   const wantsDirListing = partial === "" || partial.endsWith("/");
   const expanded =
     partial === "~" || partial === "~/"
@@ -339,7 +263,9 @@ function applyPopupSelection(
   const lastSlash = ctx.partial.lastIndexOf("/");
   const newPartial =
     lastSlash >= 0
-      ? ctx.partial.slice(0, lastSlash + 1) + entry.name + (entry.isDir ? "/" : "")
+      ? ctx.partial.slice(0, lastSlash + 1) +
+        entry.name +
+        (entry.isDir ? "/" : "")
       : entry.name + (entry.isDir ? "/" : "");
   const base = draft.slice(0, draft.length - ctx.matchLen) + "@" + newPartial;
   return entry.isDir ? base : base + " ";
@@ -358,7 +284,7 @@ const COMMANDS: CommandDef[] = [
   { name: "compact", args: "<agent>", desc: "Summarize & compact the agent's session to free context", op: "compact" },
   { name: "status", args: "<agent>", desc: "Show session, mode, queue, turns, cost", op: "status" },
   { name: "usage", args: "<agent>", desc: "Show cumulative tokens & cost (per-model breakdown)", op: "usage" },
-  { name: "mode", args: "<agent> [default|accept|auto|plan]", desc: "Set permission mode (no arg: show current)", op: "mode" },
+  { name: "mode", args: "<agent> [default|accept|auto|plan]", desc: "Set permission mode", op: "mode" },
   { name: "pause", args: "<agent>", desc: "Stop processing messages", op: "pause" },
   { name: "resume", args: "<agent>", desc: "Resume a paused agent", op: "resume" },
   { name: "kill", args: "<agent>", desc: "Terminate an agent process", op: "kill" },
@@ -366,17 +292,71 @@ const COMMANDS: CommandDef[] = [
   { name: "exit", args: "", desc: "Leave the chat (alias)", local: "quit" },
 ];
 
+interface PickerState {
+  open: boolean;
+  index: number;
+  selected: Set<string>;
+  draft: string;
+}
+
+function MessageBlock({
+  entry,
+  me,
+  colorFor,
+}: {
+  entry: LocalEntry;
+  me: string;
+  colorFor: (who: string) => string;
+}) {
+  if (entry.kind === "system") {
+    const lines = entry.content.split("\n");
+    return (
+      <Box flexDirection="column">
+        {lines.map((line, i) => (
+          <Text key={i} dimColor>
+            {i === 0 ? "── " : "   "}
+            {line}
+          </Text>
+        ))}
+      </Box>
+    );
+  }
+  const addressed =
+    entry.from !== me &&
+    ((entry.mentions?.includes(me) || entry.mentions?.includes("all")) ??
+      false);
+  const senderColor = colorFor(entry.from ?? "?");
+  const name = entry.from ?? "?";
+
+  return (
+    <Box
+      borderStyle="round"
+      borderColor={senderColor}
+      paddingX={1}
+      flexDirection="column"
+      marginBottom={1}
+    >
+      <Text>
+        <Text bold color={senderColor}>
+          {name}
+        </Text>
+        {addressed && <Text color="#ffd66b">  → you</Text>}
+      </Text>
+      <Box height={1} />
+      <ContentView text={entry.content} me={me} colorFor={colorFor} />
+    </Box>
+  );
+}
+
 function App() {
+  const { exit } = useApp();
   const [entries, setEntries] = useState<LocalEntry[]>([]);
   const [roster, setRoster] = useState<Participant[]>([]);
   const [draft, setDraft] = useState("");
-  const [inputKey, setInputKey] = useState(0);
-  const [, setPickerVer] = useState(0);
-  const [sticky, setSticky] = useState(true);
   const [fileRefIndex, setFileRefIndex] = useState(0);
+  const [, setPickerVer] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const idRef = useRef(0);
-  const scrollRef = useRef<ScrollBoxRenderable | null>(null);
   const pickerRef = useRef<PickerState>({
     open: false,
     index: 0,
@@ -387,13 +367,23 @@ function App() {
 
   const pushEntry = (e: Omit<LocalEntry, "id">) => {
     idRef.current += 1;
-    setEntries((prev) => [...prev, { ...e, id: String(idRef.current) }]);
+    const id = `${Date.now()}-${idRef.current}`;
+    setEntries((prev) => [...prev, { ...e, id }]);
   };
+
+  const colorMap = useMemo(() => {
+    const names = roster.map((p) => p.name);
+    if (myName && !names.includes(myName)) names.push(myName);
+    return assignColors(names);
+  }, [roster]);
+  const colorFor = useMemo(
+    () => (name: string) => colorMap.get(name) ?? fallbackColorFor(name),
+    [colorMap],
+  );
 
   useEffect(() => {
     const ws = new WebSocket(hubUrl);
     wsRef.current = ws;
-    wsForCleanup = ws;
     ws.addEventListener("open", () => {
       ws.send(encode({ type: MSG.HELLO, name: myName, role: "human" }));
     });
@@ -451,6 +441,13 @@ function App() {
     return () => ws.close();
   }, []);
 
+  const shutdown = () => {
+    try {
+      wsRef.current?.close();
+    } catch {}
+    exit();
+  };
+
   const sendNow = (content: string) => {
     const knownNames = new Set([...roster.map((p) => p.name), "all"]);
     const expanded = expandFileRefsInContent(content, knownNames);
@@ -465,7 +462,6 @@ function App() {
       });
     }
     setDraft("");
-    setInputKey((n) => n + 1);
   };
 
   const openPicker = (content: string) => {
@@ -476,7 +472,6 @@ function App() {
       draft: content,
     };
     setDraft("");
-    setInputKey((n) => n + 1);
     bumpPicker();
   };
 
@@ -537,68 +532,99 @@ function App() {
     return lcp.length > argPart.length ? `/${cmdName} ${lcp}` : null;
   };
 
-  useKeyboard((k) => {
-    if (k.ctrl && k.name === "c") shutdown(0);
+  const fileRefCtx = useMemo(() => {
+    if (pickerRef.current.open) return INACTIVE_FILEREF;
+    return computeFileRefContext(draft, roster, myName!);
+  }, [draft, roster]);
+
+  useEffect(() => {
+    setFileRefIndex(0);
+  }, [fileRefCtx.baseDir, fileRefCtx.filter, fileRefCtx.items.length]);
+
+  const slashOpen = draft.startsWith("/") && !pickerRef.current.open;
+  const slashMatches = useMemo(() => {
+    if (!slashOpen) return [];
+    const body = draft.slice(1);
+    const firstWord = body.split(/\s+/)[0] ?? "";
+    const hasSpace = /\s/.test(body);
+    return hasSpace
+      ? COMMANDS.filter((c) => c.name === firstWord)
+      : COMMANDS.filter((c) => c.name.startsWith(firstWord));
+  }, [slashOpen, draft]);
+
+  const pickables = roster.filter((p) => p.name !== myName);
+  const pickerItems: { name: string; role: "human" | "agent" | "all" }[] =
+    pickables.length > 1
+      ? [
+          { name: "all", role: "all" },
+          ...pickables.map((p) => ({
+            name: p.name,
+            role: p.role as "human" | "agent",
+          })),
+        ]
+      : pickables.map((p) => ({
+          name: p.name,
+          role: p.role as "human" | "agent",
+        }));
+
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      shutdown();
+      return;
+    }
     const pk = pickerRef.current;
-    if (!pk.open) {
-      if (fileRefCtx.active && fileRefCtx.items.length > 0) {
-        if (k.name === "up") {
-          setFileRefIndex((i) => Math.max(0, i - 1));
-          return;
-        }
-        if (k.name === "down") {
-          setFileRefIndex((i) =>
-            Math.min(fileRefCtx.items.length - 1, i + 1),
-          );
-          return;
-        }
-        if (k.name === "tab") {
-          const sel = fileRefCtx.items[fileRefIndex];
-          if (sel) {
-            const newDraft = applyPopupSelection(draft, fileRefCtx, sel);
-            setDraft(newDraft);
-            setInputKey((n) => n + 1);
-          }
-          return;
-        }
+    if (pk.open) {
+      if (pickerItems.length === 0) {
+        cancelPickerAndSend();
+        return;
       }
-      if (k.name === "tab" && draft.startsWith("/")) {
-        const completed = completeSlash(draft);
-        if (completed && completed !== draft) {
-          setDraft(completed);
-          setInputKey((n) => n + 1);
+      if (key.upArrow) {
+        pk.index = Math.max(0, pk.index - 1);
+        bumpPicker();
+      } else if (key.downArrow) {
+        pk.index = Math.min(pickerItems.length - 1, pk.index + 1);
+        bumpPicker();
+      } else if (input === " ") {
+        const who = pickerItems[pk.index]?.name;
+        if (who) {
+          if (pk.selected.has(who)) pk.selected.delete(who);
+          else pk.selected.add(who);
+          bumpPicker();
+        }
+      } else if (key.return) {
+        confirmPicker();
+      } else if (key.escape) {
+        cancelPickerAndSend();
+      }
+      return;
+    }
+    // File/participant popup navigation
+    if (fileRefCtx.active && fileRefCtx.items.length > 0) {
+      if (key.upArrow) {
+        setFileRefIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setFileRefIndex((i) =>
+          Math.min(fileRefCtx.items.length - 1, i + 1),
+        );
+        return;
+      }
+      if (key.tab) {
+        const sel = fileRefCtx.items[fileRefIndex];
+        if (sel) {
+          setDraft(applyPopupSelection(draft, fileRefCtx, sel));
         }
         return;
       }
-      if (k.name === "end") setSticky(true);
-      return;
     }
-    const basePickables = roster.filter((p) => p.name !== myName);
-    if (basePickables.length === 0) {
-      cancelPickerAndSend();
-      return;
-    }
-    const items: { name: string }[] =
-      basePickables.length > 1
-        ? [{ name: "all" }, ...basePickables.map((p) => ({ name: p.name }))]
-        : basePickables.map((p) => ({ name: p.name }));
-    if (k.name === "up") {
-      pk.index = Math.max(0, pk.index - 1);
-      bumpPicker();
-    } else if (k.name === "down") {
-      pk.index = Math.min(items.length - 1, pk.index + 1);
-      bumpPicker();
-    } else if (k.name === "space") {
-      const who = items[pk.index]?.name;
-      if (who) {
-        if (pk.selected.has(who)) pk.selected.delete(who);
-        else pk.selected.add(who);
-        bumpPicker();
+    // Slash command tab complete
+    if (key.tab && draft.startsWith("/")) {
+      const completed = completeSlash(draft);
+      if (completed && completed !== draft) {
+        setDraft(completed);
       }
-    } else if (k.name === "return") {
-      confirmPicker();
-    } else if (k.name === "escape") {
-      cancelPickerAndSend();
+      return;
     }
   });
 
@@ -614,7 +640,10 @@ function App() {
       });
       return;
     }
-    if (def.local === "quit") shutdown(0);
+    if (def.local === "quit") {
+      shutdown();
+      return;
+    }
     if (def.op) {
       const target = parts[1];
       if (!target) {
@@ -643,27 +672,23 @@ function App() {
     if (fileRefCtx.active && fileRefCtx.items.length > 0) {
       const sel = fileRefCtx.items[fileRefIndex];
       if (sel) {
-        const newDraft = applyPopupSelection(draft, fileRefCtx, sel);
-        setDraft(newDraft);
-        setInputKey((n) => n + 1);
+        setDraft(applyPopupSelection(draft, fileRefCtx, sel));
         return;
       }
     }
     const content = draft.trim();
     if (!content) {
-      setInputKey((n) => n + 1);
       setDraft("");
       return;
     }
     if (content.startsWith("/")) {
       runCommand(content);
       setDraft("");
-      setInputKey((n) => n + 1);
       return;
     }
     if (parseMentions(content).length === 0) {
-      const pickables = roster.filter((p) => p.name !== myName);
-      if (pickables.length > 0) {
+      const pickables2 = roster.filter((p) => p.name !== myName);
+      if (pickables2.length > 0) {
         openPicker(content);
         return;
       }
@@ -671,219 +696,38 @@ function App() {
     sendNow(content);
   };
 
-  const colorMap = useMemo(() => {
-    const names = roster.map((p) => p.name);
-    if (myName && !names.includes(myName)) names.push(myName);
-    return assignColors(names);
-  }, [roster]);
-  const colorFor = useMemo(
-    () => (name: string) => colorMap.get(name) ?? fallbackColorFor(name),
-    [colorMap],
-  );
-
-  const fileRefCtx = useMemo(() => {
-    if (pickerRef.current.open) return INACTIVE_FILEREF;
-    return computeFileRefContext(draft, roster, myName!);
-  }, [draft, roster]);
-
-  useEffect(() => {
-    setFileRefIndex(0);
-  }, [fileRefCtx.baseDir, fileRefCtx.filter, fileRefCtx.items.length]);
-
-  const slashOpen = draft.startsWith("/") && !pickerRef.current.open;
-  const slashMatches = (() => {
-    if (!slashOpen) return [];
-    const body = draft.slice(1);
-    const firstWord = body.split(/\s+/)[0] ?? "";
-    const hasSpace = /\s/.test(body);
-    return hasSpace
-      ? COMMANDS.filter((c) => c.name === firstWord)
-      : COMMANDS.filter((c) => c.name.startsWith(firstWord));
-  })();
-
-  const pickables = roster.filter((p) => p.name !== myName);
-  const pickerItems: { name: string; role: "human" | "agent" | "all" }[] =
-    pickables.length > 1
-      ? [
-          { name: "all", role: "all" },
-          ...pickables.map((p) => ({
-            name: p.name,
-            role: p.role as "human" | "agent",
-          })),
-        ]
-      : pickables.map((p) => ({
-          name: p.name,
-          role: p.role as "human" | "agent",
-        }));
-
   return (
-    <box flexDirection="column" width="100%" height="100%">
-      <scrollbox
-        ref={scrollRef}
-        flexGrow={1}
-        paddingLeft={1}
-        paddingRight={1}
-        stickyScroll={sticky}
-        stickyStart="bottom"
-      >
-        {entries.map((e) => (
-          <MessageRow
-            key={e.id}
-            entry={e}
+    <>
+      <Static items={entries}>
+        {(entry) => (
+          <MessageBlock
+            key={entry.id}
+            entry={entry}
             me={myName!}
             colorFor={colorFor}
           />
-        ))}
-      </scrollbox>
-
-      <box paddingLeft={1} paddingRight={1} flexDirection="row" flexShrink={0}>
-        <text>
-          <span fg="#6c6c6c">in room: </span>
-          {roster.length === 0 && <span fg="#6c6c6c">(just you)</span>}
-          {roster.map((p, i) => {
-            const icon = p.role === "human" ? "●" : "◆";
-            const isYou = p.name === myName;
-            return (
-              <span key={p.name}>
-                <span fg={colorFor(p.name)}>{icon} </span>
-                <strong fg={colorFor(p.name)}>{p.name}</strong>
-                {isYou && <span fg="#6c6c6c"> (you)</span>}
-                {i < roster.length - 1 && <span fg="#444">  ·  </span>}
-              </span>
-            );
-          })}
-        </text>
-      </box>
-
-      <box
-        border
-        borderColor="#666"
-        height={3}
-        flexShrink={0}
-        paddingLeft={1}
-        paddingRight={1}
-        flexDirection="row"
-      >
-        <text>
-          <strong fg={colorFor(myName!)}>{myName}</strong>
-          <span fg="#6c6c6c"> › </span>
-        </text>
-        <input
-          key={inputKey}
-          value={draft}
-          placeholder="message · @name mention · @path file · / commands · Tab/Enter completes"
-          focused={!pickerRef.current.open}
-          onInput={(v: string) => setDraft(v)}
-          onSubmit={sendDraft}
-          flexGrow={1}
-        />
-      </box>
-
-      {fileRefCtx.active && (
-        <box
-          border
-          borderColor="#555"
-          paddingLeft={1}
-          paddingRight={1}
-          flexDirection="column"
-          flexShrink={0}
-          title={` @ participants + files in ${fileRefCtx.baseDisplay}  (↑/↓ · Tab/Enter to insert) `}
-          titleAlignment="left"
-        >
-          {fileRefCtx.items.length === 0 && (
-            <text fg="#6c6c6c">
-              <span>(no match)</span>
-            </text>
-          )}
-          {fileRefCtx.items.slice(0, 10).map((item, i) => {
-            const isCursor = i === fileRefIndex;
-            const arrow = isCursor ? "▶ " : "  ";
-            if (item.kind === "participant") {
-              if (item.role === "all") {
-                return (
-                  <text key="p-all">
-                    <span fg={isCursor ? "#ffd66b" : "#444"}>{arrow}</span>
-                    <span fg="#ffd66b">★ </span>
-                    <strong fg="#ffd66b">all</strong>
-                    <span fg="#555"> (everyone in the room)</span>
-                  </text>
-                );
-              }
-              const icon = item.role === "human" ? "●" : "◆";
-              return (
-                <text key={`p-${item.name}`}>
-                  <span fg={isCursor ? "#ffd66b" : "#444"}>{arrow}</span>
-                  <span fg={colorFor(item.name)}>{icon} </span>
-                  <strong fg={isCursor ? "#ffd66b" : colorFor(item.name)}>
-                    {item.name}
-                  </strong>
-                  <span fg="#555"> ({item.role})</span>
-                </text>
-              );
-            }
-            const e = item.entry;
-            return (
-              <text key={`f-${e.name}`}>
-                <span fg={isCursor ? "#ffd66b" : "#444"}>{arrow}</span>
-                <span fg={e.isDir ? "#6a9fff" : "#d0d0d0"}>
-                  {e.name}
-                  {e.isDir ? "/" : ""}
-                </span>
-              </text>
-            );
-          })}
-          {fileRefCtx.items.length > 10 && (
-            <text fg="#6c6c6c">
-              <span>… and {fileRefCtx.items.length - 10} more</span>
-            </text>
-          )}
-        </box>
-      )}
-
-      {slashOpen && (
-        <box
-          border
-          borderColor="#555"
-          paddingLeft={1}
-          paddingRight={1}
-          flexDirection="column"
-          flexShrink={0}
-          title=" commands (Tab completes) "
-          titleAlignment="left"
-        >
-          {slashMatches.length === 0 && (
-            <text fg="#6c6c6c"><span>no matching command</span></text>
-          )}
-          {slashMatches.map((c) => (
-            <text key={c.name}>
-              <strong fg="#ffd66b">/{c.name}</strong>
-              {c.args && <span fg="#808080"> {c.args}</span>}
-              <span fg="#555">   — {c.desc}</span>
-            </text>
-          ))}
-        </box>
-      )}
+        )}
+      </Static>
 
       {pickerRef.current.open && (
-        <box
-          border
+        <Box
+          borderStyle="round"
           borderColor="#ffd66b"
-          paddingLeft={1}
-          paddingRight={1}
+          paddingX={1}
           flexDirection="column"
-          flexShrink={0}
-          title=" mention? — ↑/↓ space enter=send esc=send w/o mention "
-          titleAlignment="left"
         >
-          <text fg="#6c6c6c">
-            <span>Send: </span>
-            <strong fg="#ffd66b">
+          <Text dimColor>
+            mention? ↑/↓ space=toggle enter=send esc=send w/o mention
+          </Text>
+          <Text dimColor>
+            Send:{" "}
+            <Text color="#ffd66b" bold>
               {pickerRef.current.draft.slice(0, 60)}
               {pickerRef.current.draft.length > 60 ? "…" : ""}
-            </strong>
-          </text>
-          {pickables.length === 0 ? (
-            <text fg="#6c6c6c">(no one else — esc to send)</text>
+            </Text>
+          </Text>
+          {pickerItems.length === 0 ? (
+            <Text dimColor>(no one else — esc to send)</Text>
           ) : (
             pickerItems.map((item, i) => {
               const isSelected = pickerRef.current.selected.has(item.name);
@@ -891,56 +735,155 @@ function App() {
               const marker = isSelected ? "[x]" : "[ ]";
               if (item.name === "all") {
                 return (
-                  <text key="all">
-                    <span fg={isCursor ? "#ffd66b" : "#444"}>
+                  <Text key="all">
+                    <Text color={isCursor ? "#ffd66b" : "gray"}>
                       {isCursor ? "▶ " : "  "}
-                    </span>
-                    <span fg={isSelected ? "#ffd66b" : "#808080"}>{marker} </span>
-                    <span fg="#ffd66b">★ </span>
-                    <strong fg="#ffd66b">all</strong>
-                    <span fg="#555"> (everyone)</span>
-                  </text>
+                    </Text>
+                    <Text color={isSelected ? "#ffd66b" : "gray"}>
+                      {marker}{" "}
+                    </Text>
+                    <Text color="#ffd66b">★ </Text>
+                    <Text bold color="#ffd66b">all</Text>
+                    <Text dimColor> (everyone)</Text>
+                  </Text>
                 );
               }
               const icon = item.role === "human" ? "●" : "◆";
               return (
-                <text key={item.name}>
-                  <span fg={isCursor ? "#ffd66b" : "#444"}>
+                <Text key={item.name}>
+                  <Text color={isCursor ? "#ffd66b" : "gray"}>
                     {isCursor ? "▶ " : "  "}
-                  </span>
-                  <span fg={isSelected ? "#ffd66b" : "#808080"}>{marker} </span>
-                  <span fg={colorFor(item.name)}>{icon} </span>
-                  <strong fg={isCursor ? "#ffd66b" : colorFor(item.name)}>
+                  </Text>
+                  <Text color={isSelected ? "#ffd66b" : "gray"}>{marker} </Text>
+                  <Text color={colorFor(item.name)}>{icon} </Text>
+                  <Text bold color={isCursor ? "#ffd66b" : colorFor(item.name)}>
                     {item.name}
-                  </strong>
-                </text>
+                  </Text>
+                </Text>
               );
             })
           )}
-        </box>
+        </Box>
       )}
-    </box>
+
+      <Box paddingX={1}>
+        <Text>
+          <Text dimColor>in room: </Text>
+          {roster.length === 0 ? (
+            <Text dimColor>(just you)</Text>
+          ) : (
+            roster.map((p, i) => {
+              const icon = p.role === "human" ? "●" : "◆";
+              const isYou = p.name === myName;
+              const sep = i < roster.length - 1 ? "  ·  " : "";
+              return (
+                <Text key={p.name}>
+                  <Text color={colorFor(p.name)}>{icon} </Text>
+                  <Text bold color={colorFor(p.name)}>
+                    {p.name}
+                  </Text>
+                  {isYou ? <Text dimColor> (you)</Text> : null}
+                  {sep ? <Text dimColor>{sep}</Text> : null}
+                </Text>
+              );
+            })
+          )}
+        </Text>
+      </Box>
+
+      <Box borderStyle="round" borderColor="gray" paddingX={1}>
+        <Text bold color={colorFor(myName!)}>
+          {myName}
+        </Text>
+        <Text dimColor> › </Text>
+        <TextInput
+          value={draft}
+          onChange={setDraft}
+          onSubmit={sendDraft}
+          placeholder="message · @name mention · @path file · / commands · Tab/Enter completes"
+          focus={!pickerRef.current.open}
+        />
+      </Box>
+
+      {fileRefCtx.active && (
+        <Box
+          borderStyle="round"
+          borderColor="gray"
+          paddingX={1}
+          flexDirection="column"
+        >
+          <Text dimColor>
+            @ participants + files in {fileRefCtx.baseDisplay} (↑/↓ · Tab/Enter
+            inserts)
+          </Text>
+          {fileRefCtx.items.length === 0 && <Text dimColor>(no match)</Text>}
+          {fileRefCtx.items.slice(0, 10).map((item, i) => {
+            const isCursor = i === fileRefIndex;
+            const arrow = isCursor ? "▶ " : "  ";
+            if (item.kind === "participant") {
+              if (item.role === "all") {
+                return (
+                  <Text key="p-all">
+                    <Text color={isCursor ? "#ffd66b" : "gray"}>{arrow}</Text>
+                    <Text color="#ffd66b">★ </Text>
+                    <Text bold color="#ffd66b">
+                      all
+                    </Text>
+                    <Text dimColor> (everyone in the room)</Text>
+                  </Text>
+                );
+              }
+              const icon = item.role === "human" ? "●" : "◆";
+              return (
+                <Text key={`p-${item.name}`}>
+                  <Text color={isCursor ? "#ffd66b" : "gray"}>{arrow}</Text>
+                  <Text color={colorFor(item.name)}>{icon} </Text>
+                  <Text bold color={isCursor ? "#ffd66b" : colorFor(item.name)}>
+                    {item.name}
+                  </Text>
+                  <Text dimColor> ({item.role})</Text>
+                </Text>
+              );
+            }
+            const e = item.entry;
+            return (
+              <Text key={`f-${e.name}`}>
+                <Text color={isCursor ? "#ffd66b" : "gray"}>{arrow}</Text>
+                <Text color={e.isDir ? "#6a9fff" : "#d0d0d0"}>
+                  {e.name}
+                  {e.isDir ? "/" : ""}
+                </Text>
+              </Text>
+            );
+          })}
+          {fileRefCtx.items.length > 10 && (
+            <Text dimColor>… and {fileRefCtx.items.length - 10} more</Text>
+          )}
+        </Box>
+      )}
+
+      {slashOpen && (
+        <Box
+          borderStyle="round"
+          borderColor="gray"
+          paddingX={1}
+          flexDirection="column"
+        >
+          <Text dimColor>commands (Tab completes)</Text>
+          {slashMatches.length === 0 && <Text dimColor>no matching command</Text>}
+          {slashMatches.map((c) => (
+            <Text key={c.name}>
+              <Text bold color="#ffd66b">
+                /{c.name}
+              </Text>
+              {c.args && <Text dimColor> {c.args}</Text>}
+              <Text dimColor>   — {c.desc}</Text>
+            </Text>
+          ))}
+        </Box>
+      )}
+    </>
   );
 }
 
-const renderer = await createCliRenderer({
-  exitOnCtrlC: true,
-  useMouse: true,
-});
-rendererRef = renderer;
-createRoot(renderer).render(<App />);
-
-process.on("SIGINT", () => shutdown(0));
-process.on("SIGTERM", () => shutdown(0));
-process.on("exit", () => {
-  try {
-    rendererRef?.destroy();
-  } catch {}
-});
-process.on("uncaughtException", (e) => {
-  try {
-    rendererRef?.destroy();
-  } catch {}
-  console.error(e);
-  process.exit(1);
-});
+render(<App />);
