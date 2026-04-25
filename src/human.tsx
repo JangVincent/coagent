@@ -576,7 +576,16 @@ function App() {
       shutdown();
       return;
     }
-    if (key.shift && key.return && !pickerRef.current.open) {
+    // Newline triggers (any inserts \n instead of submitting):
+    //  - Shift+Enter — works once kitty keyboard protocol negotiates
+    //  - Alt/Option+Enter — works without kitty on most terminals
+    //  - Ctrl+J — raw LF, distinct from Enter (CR), works everywhere
+    const wantsNewline =
+      !pickerRef.current.open &&
+      ((key.shift && key.return) ||
+        (key.meta && key.return) ||
+        (key.ctrl && input === "j"));
+    if (wantsNewline) {
       setDraft((d) => d + "\n");
       setInputKey((k) => k + 1);
       skipNextSubmit.current = true;
