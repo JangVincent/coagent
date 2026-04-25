@@ -1,7 +1,33 @@
-export {};
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import updateNotifier from "update-notifier";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const pkgPath = path.resolve(here, "..", "package.json");
+const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
+  name: string;
+  version: string;
+};
+
+updateNotifier({
+  pkg,
+  updateCheckInterval: 1000 * 60 * 60 * 24,
+  shouldNotifyInNpmScript: false,
+}).notify({
+  defer: false,
+  isGlobal: true,
+  message:
+    "Update available {currentVersion} → {latestVersion}\nRun {updateCommand} to update.",
+});
 
 const sub = process.argv[2];
 const rest = process.argv.slice(3);
+
+if (sub === "--version" || sub === "-v") {
+  console.log(pkg.version);
+  process.exit(0);
+}
 
 const USAGE = `coagent — multi-participant chat for Claude Code agents and humans
 
