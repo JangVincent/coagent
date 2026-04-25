@@ -915,8 +915,8 @@ function App() {
   );
 }
 
-// Kitty keyboard protocol is enabled in bin/coagent.mjs before this module
-// loads, so the terminal has time to switch modes before user input. Ink's
-// keypress parser detects kitty-format escapes by byte pattern regardless,
-// so we don't need to pass kittyKeyboard here.
-render(<App />);
+// Kitty keyboard "disambiguate" flag is pushed in bin/coagent.mjs before this
+// module loads so the terminal has time to switch modes before any input.
+// We also pass kittyKeyboard:enabled to Ink so its input parser is on the
+// kitty path. Pushing twice is harmless (stack-based) and pops match up.
+render(<App />, { kittyKeyboard: { mode: "enabled" } });
