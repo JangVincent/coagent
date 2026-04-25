@@ -406,7 +406,6 @@ function MessageBlock({
       paddingX={1}
       flexDirection="column"
       marginBottom={1}
-      alignSelf="flex-start"
     >
       <Text>
         <Text bold color={senderColor}>
