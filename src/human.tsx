@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { render, Box, Text, Static, useInput, useApp } from "ink";
-import TextInput from "ink-text-input";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -299,6 +298,78 @@ interface PickerState {
   draft: string;
 }
 
+function ChatInput({
+  value,
+  onChange,
+  onSubmit,
+  focus,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  focus: boolean;
+  placeholder?: string;
+}) {
+  useInput(
+    (input, key) => {
+      // Newline triggers — checked before Enter so they never submit.
+      const wantsNewline =
+        (key.shift && key.return) ||
+        (key.meta && key.return) ||
+        (key.ctrl && input === "j");
+      if (wantsNewline) {
+        onChange(value + "\n");
+        return;
+      }
+      if (key.return) {
+        onSubmit();
+        return;
+      }
+      if (key.backspace || key.delete) {
+        onChange(value.slice(0, -1));
+        return;
+      }
+      // Pass these through to the App-level useInput.
+      if (
+        key.tab ||
+        key.upArrow ||
+        key.downArrow ||
+        key.leftArrow ||
+        key.rightArrow ||
+        key.escape ||
+        key.ctrl
+      ) {
+        return;
+      }
+      if (input && input.length >= 1) {
+        onChange(value + input);
+      }
+    },
+    { isActive: focus },
+  );
+
+  if (!value) {
+    if (placeholder) {
+      return focus ? (
+        <Text>
+          <Text inverse>{placeholder[0] || " "}</Text>
+          <Text dimColor>{placeholder.slice(1)}</Text>
+        </Text>
+      ) : (
+        <Text dimColor>{placeholder}</Text>
+      );
+    }
+    return focus ? <Text inverse> </Text> : <Text> </Text>;
+  }
+  return (
+    <Text>
+      {value}
+      {focus ? <Text inverse> </Text> : null}
+    </Text>
+  );
+}
+
 function MessageBlock({
   entry,
   me,
@@ -353,11 +424,9 @@ function App() {
   const [entries, setEntries] = useState<LocalEntry[]>([]);
   const [roster, setRoster] = useState<Participant[]>([]);
   const [draft, setDraft] = useState("");
-  const [inputKey, setInputKey] = useState(0);
   const [fileRefIndex, setFileRefIndex] = useState(0);
   const [, setPickerVer] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
-  const skipNextSubmit = useRef(false);
   const idRef = useRef(0);
   const pickerRef = useRef<PickerState>({
     open: false,
@@ -464,7 +533,6 @@ function App() {
       });
     }
     setDraft("");
-    setInputKey((k) => k + 1);
   };
 
   const openPicker = (content: string) => {
@@ -475,7 +543,6 @@ function App() {
       draft: content,
     };
     setDraft("");
-    setInputKey((k) => k + 1);
     bumpPicker();
   };
 
@@ -576,21 +643,10 @@ function App() {
       shutdown();
       return;
     }
-    // Newline triggers (any inserts \n instead of submitting):
-    //  - Shift+Enter — works once kitty keyboard protocol negotiates
-    //  - Alt/Option+Enter — works without kitty on most terminals
-    //  - Ctrl+J — raw LF, distinct from Enter (CR), works everywhere
-    const wantsNewline =
-      !pickerRef.current.open &&
-      ((key.shift && key.return) ||
-        (key.meta && key.return) ||
-        (key.ctrl && input === "j"));
-    if (wantsNewline) {
-      setDraft((d) => d + "\n");
-      setInputKey((k) => k + 1);
-      skipNextSubmit.current = true;
-      return;
-    }
+    // Newline detection (Shift/Alt+Enter, Ctrl+J) is owned by <ChatInput>,
+    // which sees the keypress before App's useInput in the picker-closed
+    // case and decides whether to call onSubmit. App only handles the
+    // navigation/control keys below.
     const pk = pickerRef.current;
     if (pk.open) {
       if (pickerItems.length === 0) {
@@ -633,8 +689,7 @@ function App() {
         const sel = fileRefCtx.items[fileRefIndex];
         if (sel) {
           setDraft(applyPopupSelection(draft, fileRefCtx, sel));
-          setInputKey((k) => k + 1);
-        }
+              }
         return;
       }
     }
@@ -643,8 +698,7 @@ function App() {
       const completed = completeSlash(draft);
       if (completed && completed !== draft) {
         setDraft(completed);
-        setInputKey((k) => k + 1);
-      }
+          }
       return;
     }
   });
@@ -690,29 +744,22 @@ function App() {
   };
 
   const sendDraft = () => {
-    if (skipNextSubmit.current) {
-      skipNextSubmit.current = false;
-      return;
-    }
     if (fileRefCtx.active && fileRefCtx.items.length > 0) {
       const sel = fileRefCtx.items[fileRefIndex];
       if (sel) {
         setDraft(applyPopupSelection(draft, fileRefCtx, sel));
-        setInputKey((k) => k + 1);
-        return;
+            return;
       }
     }
     const content = draft.trim();
     if (!content) {
       setDraft("");
-      setInputKey((k) => k + 1);
-      return;
+        return;
     }
     if (content.startsWith("/")) {
       runCommand(content);
       setDraft("");
-      setInputKey((k) => k + 1);
-      return;
+        return;
     }
     if (parseMentions(content).length === 0) {
       const pickables2 = roster.filter((p) => p.name !== myName);
@@ -824,12 +871,11 @@ function App() {
           {myName}
         </Text>
         <Text dimColor> › </Text>
-        <TextInput
-          key={inputKey}
+        <ChatInput
           value={draft}
           onChange={setDraft}
           onSubmit={sendDraft}
-          placeholder="message · @name mention · @path file · / commands · Tab/Enter completes"
+          placeholder="message · @name · @path · /cmd · Shift+Enter newline · Tab completes"
           focus={!pickerRef.current.open}
         />
       </Box>
