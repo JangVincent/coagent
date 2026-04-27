@@ -2,15 +2,15 @@
 
 // Push the kitty keyboard "disambiguate escape codes" flag as early as
 // possible so the terminal has time to switch modes before user input.
-// The 'exit' handler runs on any termination path (normal, process.exit,
-// signal that wasn't caught), so it's enough on its own — we don't need
-// to install SIGINT/SIGTERM handlers here, which would pre-empt
-// per-command cleanup (e.g. hub closing its WebSocket server).
+// Only the human TUI needs it (Shift+Enter / disambiguated key reads via
+// Ink). For hub/agent the flag would suppress the legacy Ctrl+C byte in
+// kitty-aware terminals, breaking SIGINT delivery — they read no stdin
+// and rely on the TTY driver to translate ^C into SIGINT.
 const ESC = String.fromCharCode(27);
 const KITTY_PUSH = ESC + "[>1u";
 const KITTY_POP = ESC + "[<u";
 
-if (process.stdout.isTTY) {
+if (process.argv[2] === "human" && process.stdout.isTTY) {
   process.stdout.write(KITTY_PUSH);
   process.on("exit", () => {
     try {
