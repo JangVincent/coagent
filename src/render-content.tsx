@@ -1,14 +1,26 @@
 import { marked, type Token, type Tokens } from "marked";
 import { Box, Text } from "ink";
 import type { ReactNode } from "react";
+import { newMentionRegex } from "./protocol.ts";
 
 marked.use({ gfm: true, breaks: false });
 
 const COLLAPSE_THRESHOLD = 30;
 
-const MENTION_RE = /@([A-Za-z][A-Za-z0-9_-]*)(?![/~]|\.[\w/])/g;
+// Keep this in sync with parseMentions by reusing the same factory — the
+// previous local copy lacked \w in its lookahead, which let `@scope/pkg`
+// backtrack to color `@scop` etc.
+const MENTION_RE = newMentionRegex();
 
-type RenderDeps = { me: string; colorFor: (who: string) => string };
+type RenderDeps = {
+  me: string;
+  colorFor: (who: string) => string;
+  // Returns true only for names that have actually been in the room this
+  // session (plus the literal "all"). Filters out lookalikes such as the
+  // `@latest` in an npm install command — they match the @-name pattern
+  // but aren't pings.
+  isParticipant: (who: string) => boolean;
+};
 
 function parse(text: string): Token[] {
   return marked.lexer(text);
@@ -16,7 +28,7 @@ function parse(text: string): Token[] {
 
 function renderTextWithMentions(
   raw: string,
-  { colorFor }: RenderDeps,
+  { colorFor, isParticipant }: RenderDeps,
   keyPrefix: string,
 ): ReactNode[] {
   const out: ReactNode[] = [];
@@ -25,6 +37,7 @@ function renderTextWithMentions(
   let m: RegExpExecArray | null;
   let idx = 0;
   while ((m = MENTION_RE.exec(raw)) !== null) {
+    if (!isParticipant(m[1])) continue;
     if (m.index > last) {
       out.push(
         <Text key={`${keyPrefix}-t${idx++}`}>{raw.slice(last, m.index)}</Text>,
@@ -376,12 +389,17 @@ export function ContentView({
   text,
   me,
   colorFor,
+  isParticipant,
 }: { text: string } & RenderDeps) {
   const tokens = parse(text);
   return (
     <Box flexDirection="column">
       {tokens.map((b, i) => (
-        <BlockRenderer key={i} block={b} deps={{ me, colorFor }} />
+        <BlockRenderer
+          key={i}
+          block={b}
+          deps={{ me, colorFor, isParticipant }}
+        />
       ))}
     </Box>
   );

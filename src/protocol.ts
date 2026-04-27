@@ -88,15 +88,19 @@ export type ClientMsg =
 
 export const MENTION_ALL = "all";
 
+// Reject any trailing identifier/path char so `@vincent.com`, `@foo/bar`,
+// `@vincent_v2` (when partial match would shorten) don't sneak through via
+// backtracking. Use newMentionRegex() at each call site — the /g flag is
+// stateful (lastIndex) so a shared instance can't be reused safely.
+export const newMentionRegex = () =>
+  /@([A-Za-z][A-Za-z0-9_-]*)(?![\w.\-/~])/g;
+
 export function parseMentions(
   text: string,
   validNames?: Set<string>,
 ): string[] {
   const names = new Set<string>();
-  // Reject any trailing identifier/path char so `@vincent.com`, `@foo/bar`,
-  // `@vincent_v2` (when partial match would shorten) don't sneak through via
-  // backtracking.
-  const re = /@([A-Za-z][A-Za-z0-9_-]*)(?![\w.\-/~])/g;
+  const re = newMentionRegex();
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const n = m[1];

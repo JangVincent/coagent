@@ -306,10 +306,12 @@ function MessageBlock({
   entry,
   me,
   colorFor,
+  isParticipant,
 }: {
   entry: LocalEntry;
   me: string;
   colorFor: (who: string) => string;
+  isParticipant: (who: string) => boolean;
 }) {
   if (entry.kind === "system") {
     const lines = entry.content.split("\n");
@@ -346,7 +348,12 @@ function MessageBlock({
         {addressed && <Text color="#ffd66b">  → you</Text>}
       </Text>
       <Box height={1} />
-      <ContentView text={entry.content} me={me} colorFor={colorFor} />
+      <ContentView
+        text={entry.content}
+        me={me}
+        colorFor={colorFor}
+        isParticipant={isParticipant}
+      />
     </Box>
   );
 }
@@ -400,6 +407,13 @@ function App() {
   }, [roster]);
   const colorFor = useMemo(
     () => (name: string) => colorMap.get(name) ?? fallbackColorFor(name),
+    [colorMap],
+  );
+  // colorMap accumulates every name we've seen this session (current roster
+  // + leavers + myName), so this catches both live and historical mentions
+  // while still rejecting unseen lookalikes like "@latest" in an npm command.
+  const isParticipant = useMemo(
+    () => (name: string) => name === "all" || colorMap.has(name),
     [colorMap],
   );
 
@@ -746,6 +760,7 @@ function App() {
             entry={entry}
             me={myName!}
             colorFor={colorFor}
+            isParticipant={isParticipant}
           />
         )}
       </Static>

@@ -25,6 +25,12 @@ test("path-like @./foo is not a mention", () => {
   assert.deepEqual(parseMentions("see @./src/foo.ts"), []);
 });
 
+test("npm scope @vincentjang/coagent is not a (partial) mention", () => {
+  // Guards against backtracking that could match "@vincentjan" by shrinking
+  // the greedy identifier to escape the "/" lookahead.
+  assert.deepEqual(parseMentions("install @vincentjang/coagent"), []);
+});
+
 test("home-relative @~/foo is not a mention", () => {
   assert.deepEqual(parseMentions("see @~/notes.md"), []);
 });
