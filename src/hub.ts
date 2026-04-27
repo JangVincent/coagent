@@ -168,6 +168,14 @@ wss.on("connection", (ws) => {
       console.log(`[hub] ack from ${data.name} op=${msg.op} ok=${msg.ok}`);
       return;
     }
+
+    if (msg.type === MSG.ACTIVITY) {
+      // Anti-spoof: name on the wire must match the client's hello name.
+      // Senders don't get an echo — they already know what they're doing.
+      if (msg.name !== data.name) return;
+      broadcast({ ...msg, ts: Date.now() }, ws);
+      return;
+    }
   });
 
   ws.on("close", () => {

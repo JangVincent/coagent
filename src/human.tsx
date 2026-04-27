@@ -8,6 +8,7 @@ import {
   encode,
   decode,
   parseMentions,
+  type ActivityMsg,
   type ChatMsg,
   type Participant,
   type ServerMsg,
@@ -362,6 +363,9 @@ function App() {
   const { exit } = useApp();
   const [entries, setEntries] = useState<LocalEntry[]>([]);
   const [roster, setRoster] = useState<Participant[]>([]);
+  const [activities, setActivities] = useState<Map<string, ActivityMsg>>(
+    () => new Map(),
+  );
   const [draft, setDraft] = useState("");
   const [fileRefIndex, setFileRefIndex] = useState(0);
   const [, setPickerVer] = useState(0);
@@ -462,10 +466,28 @@ function App() {
           });
         } else if (msg.type === MSG.ROSTER) {
           setRoster(msg.participants);
+          const namesIn = new Set(msg.participants.map((p) => p.name));
+          setActivities((prev) => {
+            let next: Map<string, ActivityMsg> | null = null;
+            for (const k of prev.keys()) {
+              if (!namesIn.has(k)) {
+                if (!next) next = new Map(prev);
+                next.delete(k);
+              }
+            }
+            return next ?? prev;
+          });
         } else if (msg.type === MSG.SYSTEM) {
           if (Array.isArray(msg.participants)) setRoster(msg.participants);
           lastSystem = msg.text;
           pushEntry({ kind: "system", content: msg.text, ts: Date.now() });
+        } else if (msg.type === MSG.ACTIVITY) {
+          setActivities((prev) => {
+            const next = new Map(prev);
+            if (msg.kind === "idle") next.delete(msg.name);
+            else next.set(msg.name, msg);
+            return next;
+          });
         } else if (msg.type === MSG.CONTROL_ACK) {
           const mark = msg.ok ? "✓" : "✗";
           const info = msg.info ? ` — ${msg.info}` : "";
@@ -832,6 +854,12 @@ function App() {
               const icon = p.role === "human" ? "●" : "◆";
               const isYou = p.name === myName;
               const sep = i < roster.length - 1 ? "  ·  " : "";
+              const a = activities.get(p.name);
+              const activityLabel = a
+                ? a.kind === "tool" && a.tool
+                  ? a.tool
+                  : a.kind
+                : null;
               return (
                 <Text key={p.name}>
                   <Text color={colorFor(p.name)}>{icon} </Text>
@@ -839,6 +867,9 @@ function App() {
                     {p.name}
                   </Text>
                   {isYou ? <Text dimColor> (you)</Text> : null}
+                  {activityLabel ? (
+                    <Text dimColor> ({activityLabel}…)</Text>
+                  ) : null}
                   {sep ? <Text dimColor>{sep}</Text> : null}
                 </Text>
               );

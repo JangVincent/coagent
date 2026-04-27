@@ -5,7 +5,15 @@ export const MSG = {
   SYSTEM: "system",
   CONTROL: "control",
   CONTROL_ACK: "control_ack",
+  ACTIVITY: "activity",
 } as const;
+
+export type ActivityKind =
+  | "idle"
+  | "thinking"
+  | "tool"
+  | "compact"
+  | "usage";
 
 export const CONTROL_OPS = [
   "clear",
@@ -74,17 +82,27 @@ export interface ControlAckMsg {
   ts: number;
 }
 
+export interface ActivityMsg {
+  type: "activity";
+  name: string;
+  kind: ActivityKind;
+  tool?: string;
+  ts: number;
+}
+
 export type ServerMsg =
   | ChatMsg
   | RosterMsg
   | SystemMsg
   | ControlMsg
-  | ControlAckMsg;
+  | ControlAckMsg
+  | ActivityMsg;
 export type ClientMsg =
   | HelloMsg
   | OutgoingMsg
   | ControlMsg
-  | ControlAckMsg;
+  | ControlAckMsg
+  | ActivityMsg;
 
 export const MENTION_ALL = "all";
 

@@ -167,3 +167,70 @@ test("messages are broadcast to other clients", async () => {
   b.close();
   await sleep(50);
 });
+
+test("activity is broadcast to peers but not echoed to sender", async () => {
+  const ag = await open();
+  hello(ag, "act-ag", "agent");
+  await collect(ag, 100);
+
+  const hu = await open();
+  hello(hu, "act-hu", "human");
+  await collect(hu, 100);
+
+  ag.send(
+    JSON.stringify({
+      type: "activity",
+      name: "act-ag",
+      kind: "tool",
+      tool: "Bash",
+      ts: Date.now(),
+    }),
+  );
+  const [recAg, recHu] = await Promise.all([
+    collect(ag, 200),
+    collect(hu, 200),
+  ]);
+  assert.ok(
+    recHu.some(
+      (m) => m.type === "activity" && m.name === "act-ag" && m.tool === "Bash",
+    ),
+    "human should see the agent's activity",
+  );
+  assert.ok(
+    !recAg.some((m) => m.type === "activity"),
+    "agent should not receive its own activity",
+  );
+
+  ag.close();
+  hu.close();
+  await sleep(50);
+});
+
+test("activity with mismatched name is dropped (anti-spoof)", async () => {
+  const a = await open();
+  hello(a, "spoof-a", "agent");
+  await collect(a, 100);
+
+  const b = await open();
+  hello(b, "spoof-b", "human");
+  await collect(b, 100);
+
+  // a claims to be b
+  a.send(
+    JSON.stringify({
+      type: "activity",
+      name: "spoof-b",
+      kind: "thinking",
+      ts: Date.now(),
+    }),
+  );
+  const recB = await collect(b, 200);
+  assert.ok(
+    !recB.some((m) => m.type === "activity"),
+    "spoofed activity must not be relayed",
+  );
+
+  a.close();
+  b.close();
+  await sleep(50);
+});

@@ -10,6 +10,7 @@ import {
   type Participant,
   type ControlMsg,
   type ControlOp,
+  type ActivityKind,
 } from "./protocol.ts";
 import { makeIntro } from "./agent/intro.ts";
 import { accumulateModelUsage, formatUsage } from "./agent/usage.ts";
@@ -123,6 +124,32 @@ function setSessionId(id: string | null) {
   sessionId = id;
 }
 
+// Last activity sent to the hub. Used to dedupe — repeated calls with the
+// same kind+tool are dropped so we don't flood the wire when the model
+// produces several text chunks in a row or hits the same tool twice.
+let lastActivity: { kind: ActivityKind; tool?: string } | null = null;
+
+function sendActivity(kind: ActivityKind, tool?: string) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (
+    lastActivity &&
+    lastActivity.kind === kind &&
+    lastActivity.tool === tool
+  ) {
+    return;
+  }
+  lastActivity = { kind, tool };
+  ws.send(
+    encode({
+      type: MSG.ACTIVITY,
+      name,
+      kind,
+      tool,
+      ts: Date.now(),
+    }),
+  );
+}
+
 function sendAck(
   op: ControlOp,
   ok: boolean,
@@ -149,6 +176,7 @@ async function runUsagePassthrough(requester: string) {
     sendAck("usage", false, `busy: in ${currentTask}`, requester);
     return;
   }
+  sendActivity("usage");
   let resultText = "";
   let failure: string | null = null;
   try {
@@ -195,7 +223,11 @@ async function runUsagePassthrough(requester: string) {
       : `${formatUsage(totalCost, totalTurns)}\n(CLI /usage returned no data — reset window info is not exposed via SDK)`;
     sendAck("usage", true, combined, requester);
   }
-  if (queue.length > 0) processQueue();
+  if (queue.length > 0) {
+    processQueue();
+  } else {
+    sendActivity("idle");
+  }
 }
 
 async function runCompact(requester: string) {
@@ -209,6 +241,7 @@ async function runCompact(requester: string) {
     return;
   }
   console.log(`[${name}] /compact starting (session=${sessionId})`);
+  sendActivity("compact");
   let acked = false;
   try {
     const res = query({
@@ -255,7 +288,11 @@ async function runCompact(requester: string) {
     }
   } finally {
     finishTask(controller);
-    if (queue.length > 0) processQueue();
+    if (queue.length > 0) {
+      processQueue();
+    } else {
+      sendActivity("idle");
+    }
   }
 }
 
@@ -387,6 +424,7 @@ async function processQueue() {
   const promptText = header + body;
 
   console.log(`\n[${name}] --- turn (${batch.length} incoming) ---`);
+  sendActivity("thinking");
   try {
     const res = query({
       prompt: promptText,
@@ -413,11 +451,13 @@ async function processQueue() {
           for (const block of content) {
             if (block.type === "text" && block.text?.trim()) {
               process.stdout.write(`[${name} thinking] ${block.text}\n`);
+              sendActivity("thinking");
             } else if (
               block.type === "tool_use" &&
               !String(block.name).endsWith("send_chat")
             ) {
               process.stdout.write(`[${name} tool] ${block.name}\n`);
+              sendActivity("tool", String(block.name));
             }
           }
         }
@@ -444,7 +484,11 @@ async function processQueue() {
     }
   } finally {
     finishTask(controller);
-    if (queue.length > 0) processQueue();
+    if (queue.length > 0) {
+      processQueue();
+    } else {
+      sendActivity("idle");
+    }
   }
 }
 
