@@ -50,9 +50,14 @@ if (sub === "update" || sub === "self-update" || sub === "upgrade") {
   console.log(
     `[coagent] updating ${pkg.name} from ${pkg.version} to latest…`,
   );
-  const child = spawn("npm", ["i", "-g", `${pkg.name}@latest`], {
-    stdio: "inherit",
-  });
+  // --prefer-online forces npm to revalidate registry metadata so a stale
+  // local cache can't resolve "@latest" to a version that's already
+  // superseded on the registry.
+  const child = spawn(
+    "npm",
+    ["i", "-g", "--prefer-online", `${pkg.name}@latest`],
+    { stdio: "inherit" },
+  );
   child.on("exit", (code) => {
     if (code === 0) {
       console.log(`[coagent] up to date.`);
