@@ -33,10 +33,15 @@ if (!myName) {
   process.exit(1);
 }
 
+// Hue-spaced so 3-4 random picks rarely cluster. Keep clear of the yellow
+// accent (#ffd66b) used for "→ you" / picker cursor.
 const PALETTE = [
-  "#8ae6a7", "#ff6b9d", "#4fa8ff", "#ff9040", "#c58aff",
-  "#b8e06a", "#ff6565", "#7ee3d0", "#ffc79e", "#9ec8ff",
-  "#ff9ed8", "#40d0c0", "#ff9e9e", "#4ecf8f", "#e6b8ff",
+  "#ff6565", "#ff8a40", "#ffc79e", "#ff9e9e",
+  "#ff6b9d", "#ff9ed8", "#ff70c0", "#d070e0",
+  "#b8e06a", "#8ae6a7", "#4ecf8f", "#5cc070",
+  "#7ee3d0", "#40d0c0", "#40b5a0", "#5cc8e8",
+  "#9ec8ff", "#4fa8ff", "#7090ff", "#5b8fff",
+  "#9e8aff", "#c58aff", "#e6b8ff", "#b070d0",
 ];
 
 function hashIndex(who: string): number {
@@ -45,30 +50,17 @@ function hashIndex(who: string): number {
   return Math.abs(h) % PALETTE.length;
 }
 
+// Used only for names not (yet) in the roster — e.g. mentions of someone
+// who already left. Stable so the same departed name renders the same way
+// across system messages.
 function fallbackColorFor(who: string): string {
   return PALETTE[hashIndex(who)];
 }
 
-function assignColors(names: string[]): Map<string, string> {
-  const sorted = [...names].sort();
-  const taken = new Set<string>();
-  const map = new Map<string, string>();
-  for (const n of sorted) {
-    const start = hashIndex(n);
-    let color = PALETTE[start];
-    if (taken.has(color)) {
-      for (let k = 1; k <= PALETTE.length; k++) {
-        const c = PALETTE[(start + k) % PALETTE.length];
-        if (!taken.has(c)) {
-          color = c;
-          break;
-        }
-      }
-    }
-    taken.add(color);
-    map.set(n, color);
-  }
-  return map;
+function pickRandomUnused(used: Set<string>): string {
+  const free = PALETTE.filter((c) => !used.has(c));
+  const pool = free.length > 0 ? free : PALETTE;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 interface LocalEntry {
@@ -382,10 +374,29 @@ function App() {
     setEntries((prev) => [...prev, { ...e, id }]);
   };
 
-  const colorMap = useMemo(() => {
-    const names = roster.map((p) => p.name);
-    if (myName && !names.includes(myName)) names.push(myName);
-    return assignColors(names);
+  // Colors are picked once per name when first seen this session and held
+  // for the lifetime of the process — even after the participant leaves —
+  // so a returning name keeps its color and existing chat bubbles never
+  // change palette mid-session.
+  const [colorMap, setColorMap] = useState<Map<string, string>>(() => {
+    const m = new Map<string, string>();
+    if (myName) m.set(myName, pickRandomUnused(new Set()));
+    return m;
+  });
+  useEffect(() => {
+    setColorMap((prev) => {
+      let next: Map<string, string> | null = null;
+      const used = new Set(prev.values());
+      const ensure = (name: string) => {
+        if (prev.has(name)) return;
+        if (!next) next = new Map(prev);
+        const c = pickRandomUnused(used);
+        next.set(name, c);
+        used.add(c);
+      };
+      for (const p of roster) ensure(p.name);
+      return next ?? prev;
+    });
   }, [roster]);
   const colorFor = useMemo(
     () => (name: string) => colorMap.get(name) ?? fallbackColorFor(name),
