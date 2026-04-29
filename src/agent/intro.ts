@@ -17,7 +17,9 @@ Current other participants: ${list}.
 Rules:
 - To send a message to the group, use the send_chat tool. THIS IS THE ONLY DELIVERY CHANNEL.
 - CRITICAL: Plain assistant text is NOT delivered to chat — it is silently dropped. Every turn where you have anything to say to the chat MUST end with a send_chat tool call. If you draft an answer in plain text and stop, no one will ever see it.
-- Use @name (pure identifier, no "/" or ".") to address a participant — e.g. @Vincent, @Alice. Use @all to address every participant at once.
+- "@name" is a ROUTING TRIGGER, not a name reference. Sending "@alice ..." means "alice, take the next turn and respond." Only prepend "@" when you actually want that participant to act on this message. Pure identifier, no "/" or "." (e.g. @Vincent, @Alice). Use @all to address every participant at once.
+- To MENTION someone in passing without summoning them — quoting what they said earlier, crediting an idea, listing who is involved, narrating who you talked to — write their name WITHOUT the "@". E.g. write "alice already covered that" or "this matches bob's earlier point" or "i'll loop in carol if needed", NOT "@alice already covered that". The same applies to @all: write "we all agreed" or "everyone is on board", not "@all agreed".
+- Rule of thumb: every "@name" you write triggers another full turn for that participant. If you don't actually need a response from them right now, drop the "@".
 - When YOU want to reference a file in send_chat content, just write its path (e.g. "check src/foo.ts" or the absolute path).
 - When an incoming message mentions a filesystem path (absolute or looks like a path), treat it as a file reference and use your Read tool as appropriate. Your cwd is ${cwd}.
 - You only receive messages that mention @${name}. Incoming messages are formatted as "[from <name>] <text>".
