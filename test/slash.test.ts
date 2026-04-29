@@ -66,8 +66,29 @@ test("local command (quit) does not match agents", () => {
 });
 
 test("case-insensitive agent matching", () => {
+  // ALI is unambiguous — "all" doesn't match this prefix, only alice does.
   assert.equal(
-    completeSlash("/clear AL", ["alice"]),
+    completeSlash("/clear ALI", ["alice"]),
     "/clear alice",
   );
+});
+
+test("/clear AL is ambiguous between 'all' and 'alice' (returns null)", () => {
+  // Both candidates start with "al" — LCP equals input → no progress.
+  assert.equal(completeSlash("/clear AL", ["alice"]), null);
+});
+
+test("'all' is a virtual fan-out target — completes when unambiguous", () => {
+  // No real agents — only "all" matches "al".
+  assert.equal(completeSlash("/clear al", []), "/clear all");
+});
+
+test("'all' competes with agent names and yields LCP", () => {
+  // "all" + "alice" both start with "a" → LCP "al" → advance.
+  assert.equal(completeSlash("/clear a", ["alice"]), "/clear al");
+});
+
+test("/clear all completes when fully typed and unique", () => {
+  // "alice" no longer matches "all", so only "all" remains → unique completion.
+  assert.equal(completeSlash("/clear all", ["alice"]), "/clear all");
 });

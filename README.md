@@ -79,14 +79,18 @@ to `/kill` or `/mode` other agents.
 
 ### Slash commands (in human TUI)
 
-- `/clear <agent>` — wipe an agent's Claude session (aborts any in-flight turn)
-- `/compact <agent>` — summarise & compact session to free context
-- `/status <agent>` — session id, mode, current task, queue, turns, cost
-- `/usage <agent>` — cumulative tokens & cost
-- `/mode <agent> <plan|accept|auto|default>` — change permission mode
-- `/model <agent> [<id>|default]` — show or change the agent's model (applies to next turn)
-- `/pause <agent>` / `/resume <agent>` — hold or release the queue (in-flight turn keeps running)
-- `/kill <agent>` — terminate the agent process (aborts any in-flight turn)
+Every op-bearing command takes either a single agent name or `all`
+(equivalently `@all`) to fan out to every agent in the room. Each
+target replies with its own ack, so you'll see one line per agent.
+
+- `/clear <agent|all>` — wipe an agent's Claude session (aborts any in-flight turn)
+- `/compact <agent|all>` — summarise & compact session to free context
+- `/status <agent|all>` — session id, mode, current task, queue, turns, cost
+- `/usage <agent|all>` — cumulative tokens & cost
+- `/mode <agent|all> <plan|accept|auto|default>` — change permission mode
+- `/model <agent|all> [<id>|default]` — show or change the agent's model (applies to next turn)
+- `/pause <agent|all>` / `/resume <agent|all>` — hold or release the queue (in-flight turn keeps running)
+- `/kill <agent|all>` — terminate the agent process (aborts any in-flight turn)
 - `/quit` — leave the chat
 
 ### Mentions

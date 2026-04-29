@@ -722,23 +722,49 @@ function App() {
       return;
     }
     if (def.op) {
-      const target = parts[1];
-      if (!target) {
+      const targetRaw = parts[1];
+      if (!targetRaw) {
         pushEntry({
           kind: "system",
-          content: `/${def.name} needs an agent name (e.g. /${def.name} Alice)`,
+          content: `/${def.name} needs an agent name or "all" (e.g. /${def.name} Alice, /${def.name} all)`,
           ts: Date.now(),
         });
         return;
       }
+      // Accept both `all` and `@all` (mention syntax) for parity with chat.
+      const targetNormalized = targetRaw.startsWith("@")
+        ? targetRaw.slice(1)
+        : targetRaw;
+      let agentTargets: string[];
+      if (targetNormalized === "all") {
+        agentTargets = roster
+          .filter((p) => p.role === "agent")
+          .map((p) => p.name);
+        if (agentTargets.length === 0) {
+          pushEntry({
+            kind: "system",
+            content: `/${def.name} all — no agents in the room`,
+            ts: Date.now(),
+          });
+          return;
+        }
+      } else {
+        agentTargets = [targetNormalized];
+      }
       const arg = parts.slice(2).join(" ") || undefined;
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          encode({ type: MSG.CONTROL, target, op: def.op, arg }),
-        );
+        for (const t of agentTargets) {
+          wsRef.current.send(
+            encode({ type: MSG.CONTROL, target: t, op: def.op, arg }),
+          );
+        }
+        const summary =
+          agentTargets.length > 1
+            ? `→ /${def.name} all (${agentTargets.length} agents: ${agentTargets.join(", ")})${arg ? " " + arg : ""}`
+            : `→ /${def.name} ${agentTargets[0]}${arg ? " " + arg : ""}`;
         pushEntry({
           kind: "system",
-          content: `→ /${def.name} ${target}${arg ? " " + arg : ""}`,
+          content: summary,
           ts: Date.now(),
         });
       }

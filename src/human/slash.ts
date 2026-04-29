@@ -9,15 +9,15 @@ export type CommandDef = {
 };
 
 export const COMMANDS: CommandDef[] = [
-  { name: "clear", args: "<agent>", desc: "Wipe the agent's Claude session & context", op: "clear" },
-  { name: "compact", args: "<agent>", desc: "Summarize & compact the agent's session to free context", op: "compact" },
-  { name: "status", args: "<agent>", desc: "Show session, mode, queue, turns, cost", op: "status" },
-  { name: "usage", args: "<agent>", desc: "Show cumulative tokens & cost (per-model breakdown)", op: "usage" },
-  { name: "mode", args: "<agent> [default|accept|auto|plan]", desc: "Set permission mode", op: "mode" },
-  { name: "model", args: "<agent> [<model-id>|default]", desc: "Show or set the agent's model (e.g. claude-haiku-4-5)", op: "model" },
-  { name: "pause", args: "<agent>", desc: "Stop processing messages", op: "pause" },
-  { name: "resume", args: "<agent>", desc: "Resume a paused agent", op: "resume" },
-  { name: "kill", args: "<agent>", desc: "Terminate an agent process", op: "kill" },
+  { name: "clear", args: "<agent|all>", desc: "Wipe the agent's Claude session & context", op: "clear" },
+  { name: "compact", args: "<agent|all>", desc: "Summarize & compact the agent's session to free context", op: "compact" },
+  { name: "status", args: "<agent|all>", desc: "Show session, mode, queue, turns, cost", op: "status" },
+  { name: "usage", args: "<agent|all>", desc: "Show cumulative tokens & cost (per-model breakdown)", op: "usage" },
+  { name: "mode", args: "<agent|all> [default|accept|auto|plan]", desc: "Set permission mode", op: "mode" },
+  { name: "model", args: "<agent|all> [<model-id>|default]", desc: "Show or set the agent's model (e.g. claude-haiku-4-5)", op: "model" },
+  { name: "pause", args: "<agent|all>", desc: "Stop processing messages", op: "pause" },
+  { name: "resume", args: "<agent|all>", desc: "Resume a paused agent", op: "resume" },
+  { name: "kill", args: "<agent|all>", desc: "Terminate an agent process", op: "kill" },
   { name: "quit", args: "", desc: "Leave the chat", local: "quit" },
   { name: "exit", args: "", desc: "Leave the chat (alias)", local: "quit" },
 ];
@@ -67,6 +67,12 @@ export function completeSlash(input: string, agentNames: string[]): string | nul
   const matches = agentNames.filter((a) =>
     a.toLowerCase().startsWith(argPart.toLowerCase()),
   );
+  // "all" is a virtual fan-out target — every op-bearing slash command can
+  // take it. Surface it as a completion candidate so /clear all etc. is
+  // discoverable via Tab.
+  if ("all".startsWith(argPart.toLowerCase())) {
+    matches.unshift("all");
+  }
   if (matches.length === 0) return null;
   if (matches.length === 1) return `/${cmdName} ${matches[0]}`;
   const lcp = longestCommonPrefix(matches);
