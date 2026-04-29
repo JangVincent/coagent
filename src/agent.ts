@@ -17,14 +17,37 @@ import { accumulateModelUsage, formatUsage } from "./agent/usage.ts";
 import { runResumePicker } from "./agent/session-picker.ts";
 
 const args = process.argv.slice(2);
+
+// Pull `--model <id>` (or `--model=<id>`) out of argv before computing
+// positionals so the model id doesn't get treated as `cwd`.
+function extractFlagValue(flag: string): string | undefined {
+  let value: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === flag) {
+      value = args[i + 1];
+      args.splice(i, 2);
+      i -= 1;
+    } else if (a.startsWith(`${flag}=`)) {
+      value = a.slice(flag.length + 1);
+      args.splice(i, 1);
+      i -= 1;
+    }
+  }
+  return value;
+}
+const modelFlag = extractFlagValue("--model");
+
 const positional = args.filter((a) => !a.startsWith("--"));
 const name = positional[0] ?? process.env.AGENT_NAME;
 const cwdArg = positional[1] ?? process.env.AGENT_CWD ?? process.cwd();
 const wantsResume = args.includes("--resume");
 const hubUrl = process.env.HUB_URL ?? "ws://localhost:8787";
+let agentModel: string | undefined =
+  modelFlag ?? process.env.AGENT_MODEL ?? undefined;
 
 if (!name) {
-  console.error("usage: agent.ts <name> [cwd] [--resume]");
+  console.error("usage: agent.ts <name> [cwd] [--model <id>] [--resume]");
   process.exit(1);
 }
 
@@ -88,6 +111,9 @@ if (!hubIsLocal) {
     `  any chat participant can direct this agent; bypassPermissions is unsafe over the network.\n` +
     `  use /mode ${name} auto from a trusted human to override.`,
   );
+}
+if (agentModel) {
+  console.log(`[${name}] model=${agentModel} (override)`);
 }
 
 let ws: WebSocket | null = null;
@@ -193,6 +219,7 @@ async function runUsagePassthrough(requester: string) {
         permissionMode,
         resume: sessionId ?? undefined,
         abortController: controller,
+        ...(agentModel ? { model: agentModel } : {}),
         mcpServers: {
           "agent-chat": {
             type: "sdk",
@@ -257,6 +284,7 @@ async function runCompact(requester: string) {
         permissionMode,
         resume: sessionId ?? undefined,
         abortController: controller,
+        ...(agentModel ? { model: agentModel } : {}),
         mcpServers: {
           "agent-chat": {
             type: "sdk",
@@ -327,6 +355,7 @@ function handleControl(msg: ControlMsg) {
       const lines = [
         `session=${sessionId ?? "(none)"}`,
         `mode=${permissionMode}`,
+        `model=${agentModel ?? "(sdk default)"}`,
         `task=${currentTask ?? "idle"}`,
         `paused=${paused}`,
         `queue=${queue.length}`,
@@ -364,6 +393,34 @@ function handleControl(msg: ControlMsg) {
       const prev = permissionMode;
       permissionMode = resolved;
       sendAck(op, true, `${prev} → ${resolved}`, requester);
+      return;
+    }
+    case "model": {
+      const argRaw = (msg.arg ?? "").trim();
+      if (!argRaw) {
+        sendAck(
+          op,
+          true,
+          `current=${agentModel ?? "(sdk default)"} — pass an id (e.g. claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-7) to switch, or 'default' to clear.`,
+          requester,
+        );
+        return;
+      }
+      const prev = agentModel ?? "(sdk default)";
+      if (argRaw === "default" || argRaw === "clear" || argRaw === "reset") {
+        agentModel = undefined;
+      } else {
+        agentModel = argRaw;
+      }
+      // The new model takes effect on the NEXT turn — current SDK doesn't
+      // hot-swap mid-session — but most chats won't notice since we apply
+      // it on every query() call.
+      sendAck(
+        op,
+        true,
+        `${prev} → ${agentModel ?? "(sdk default)"} (applies to next turn)`,
+        requester,
+      );
       return;
     }
     case "pause": {
@@ -442,6 +499,7 @@ async function processQueue() {
         permissionMode,
         resume: sessionId ?? undefined,
         abortController: controller,
+        ...(agentModel ? { model: agentModel } : {}),
         mcpServers: {
           "agent-chat": {
             type: "sdk",

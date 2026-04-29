@@ -21,6 +21,7 @@ export const CONTROL_OPS = [
   "status",
   "usage",
   "mode",
+  "model",
   "pause",
   "resume",
   "kill",

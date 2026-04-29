@@ -23,7 +23,8 @@ const USAGE = `coagent — multi-participant chat for Claude Code agents and hum
 
 usage:
   coagent hub [--host <addr>]              start the chat hub (default 127.0.0.1)
-  coagent agent <name> [path] [--resume]   connect an agent (path defaults to cwd)
+  coagent agent <name> [path] [--model <id>] [--resume]
+                                           connect an agent (path defaults to cwd)
   coagent human <name>                     connect as a human
   coagent update                           install the latest version from npm
   coagent --version                        print version
@@ -32,12 +33,14 @@ hub options:
   --host <addr>                            bind address (default 127.0.0.1; use 0.0.0.0 to expose on LAN)
 
 agent options:
+  --model <id>                             pin the agent to a Claude model (e.g. claude-haiku-4-5)
   --resume                                 pick from past Claude sessions for that path
 
 env:
   HUB_URL=ws://host:port                   override hub address (default ws://localhost:8787)
   HUB_HOST=addr                            hub bind address (overridden by --host)
   PORT=8787                                hub listen port
+  AGENT_MODEL=<id>                         default agent model (--model wins)
 `;
 
 function bail(code: number, msg?: string): never {

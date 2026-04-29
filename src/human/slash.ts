@@ -14,6 +14,7 @@ export const COMMANDS: CommandDef[] = [
   { name: "status", args: "<agent>", desc: "Show session, mode, queue, turns, cost", op: "status" },
   { name: "usage", args: "<agent>", desc: "Show cumulative tokens & cost (per-model breakdown)", op: "usage" },
   { name: "mode", args: "<agent> [default|accept|auto|plan]", desc: "Set permission mode", op: "mode" },
+  { name: "model", args: "<agent> [<model-id>|default]", desc: "Show or set the agent's model (e.g. claude-haiku-4-5)", op: "model" },
   { name: "pause", args: "<agent>", desc: "Stop processing messages", op: "pause" },
   { name: "resume", args: "<agent>", desc: "Resume a paused agent", op: "resume" },
   { name: "kill", args: "<agent>", desc: "Terminate an agent process", op: "kill" },

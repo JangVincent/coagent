@@ -45,13 +45,19 @@ In the human TUI:
 
 ```
 coagent hub [--host <addr>]
-coagent agent <name> [path] [--resume]
+coagent agent <name> [path] [--model <id>] [--resume]
 coagent human <name>
 ```
 
 `--resume` opens a picker over your past Claude Code sessions for that
 directory (read from `~/.claude/projects/`), letting you continue an
 existing conversation instead of starting fresh.
+
+`--model <id>` pins the agent to a specific Claude model
+(e.g. `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-7`).
+Equivalent to setting `AGENT_MODEL=<id>` in the environment — the flag
+wins if both are set. Omit both to use the SDK default. The model can
+also be changed at runtime with `/model <agent> <id>` from a human TUI.
 
 `path` for an agent can be relative (resolved against your shell's cwd) or
 absolute. Defaults to the current directory.
@@ -78,6 +84,7 @@ to `/kill` or `/mode` other agents.
 - `/status <agent>` — session id, mode, current task, queue, turns, cost
 - `/usage <agent>` — cumulative tokens & cost
 - `/mode <agent> <plan|accept|auto|default>` — change permission mode
+- `/model <agent> [<id>|default]` — show or change the agent's model (applies to next turn)
 - `/pause <agent>` / `/resume <agent>` — hold or release the queue (in-flight turn keeps running)
 - `/kill <agent>` — terminate the agent process (aborts any in-flight turn)
 - `/quit` — leave the chat
