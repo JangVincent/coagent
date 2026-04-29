@@ -101,6 +101,11 @@ let currentAbort: AbortController | null = null;
 let paused = false;
 let totalCost = 0;
 let totalTurns = 0;
+// Incremented every time send_chat actually puts a message on the wire.
+// processQueue snapshots this before/after a turn to detect "model produced
+// final text but never called send_chat" — in that case we forward the SDK's
+// result text as a fallback so the answer doesn't get silently dropped.
+let sendChatCallCount = 0;
 
 function startTask(kind: TaskKind): AbortController | null {
   if (currentTask !== null) return null;
@@ -396,6 +401,7 @@ const sendChatTool = tool(
   async ({ content }) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(encode({ type: MSG.MESSAGE, content }));
+      sendChatCallCount += 1;
       process.stdout.write(`[${name} -> chat] ${content}\n`);
       return { content: [{ type: "text" as const, text: "sent" }] };
     }
@@ -425,6 +431,8 @@ async function processQueue() {
 
   console.log(`\n[${name}] --- turn (${batch.length} incoming) ---`);
   sendActivity("thinking");
+  const sendChatBefore = sendChatCallCount;
+  let resultText = "";
   try {
     const res = query({
       prompt: promptText,
@@ -463,6 +471,9 @@ async function processQueue() {
         }
       } else if (msg.type === "result") {
         const r = msg as any;
+        if (typeof r.result === "string" && r.result.trim().length > 0) {
+          resultText = r.result.trim();
+        }
         if (typeof r.total_cost_usd === "number") totalCost += r.total_cost_usd;
         totalTurns += 1;
         accumulateModelUsage(r.modelUsage);
@@ -474,6 +485,23 @@ async function processQueue() {
           `[${name}] turn done — cost $${cost}, turns=${r.num_turns}, session=${sessionId}`,
         );
       }
+    }
+
+    // Fallback: model produced a final answer but forgot to call send_chat.
+    // Forward the SDK's result text so the human/agent who @-mentioned us
+    // doesn't end up staring at silence. Only kicks in on a clean turn —
+    // aborted/errored turns fall through to catch and skip this.
+    if (
+      sendChatCallCount === sendChatBefore &&
+      resultText &&
+      ws &&
+      ws.readyState === WebSocket.OPEN
+    ) {
+      console.warn(
+        `[${name}] turn ended without send_chat — forwarding result text as fallback (${resultText.length} chars)`,
+      );
+      ws.send(encode({ type: MSG.MESSAGE, content: resultText }));
+      sendChatCallCount += 1;
     }
   } catch (e: any) {
     if (controller.signal.aborted) {
