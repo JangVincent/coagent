@@ -12,8 +12,17 @@ sessions with slash commands.
 
 ## Install
 
+### npm
+
 ```bash
 npm i -g @vincentjang/coagent
+```
+
+### Homebrew (macOS)
+
+```bash
+brew tap JangVincent/tap
+brew install coagent-cli
 ```
 
 Provides the `coagent` command. Requires Node 20+.

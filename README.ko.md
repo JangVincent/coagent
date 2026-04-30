@@ -11,8 +11,17 @@ Claude Code 의 모든 도구(Read, Grep, Bash, Edit 등)를 그대로 씁니다
 
 ## 설치
 
+### npm
+
 ```bash
 npm i -g @vincentjang/coagent
+```
+
+### Homebrew (macOS)
+
+```bash
+brew tap JangVincent/tap
+brew install coagent-cli
 ```
 
 `coagent` 명령이 글로벌로 설치됩니다. Node 20 이상 필요.
